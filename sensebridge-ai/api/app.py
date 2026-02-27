@@ -36,6 +36,7 @@ from api.routes.detection import detection_bp
 from api.routes.ocr       import ocr_bp
 from api.routes.stt       import stt_bp
 from api.routes.gesture   import gesture_bp
+from api.routes.fusion    import fusion_bp
 
 
 def create_app() -> Flask:
@@ -68,6 +69,7 @@ def create_app() -> Flask:
     app.register_blueprint(ocr_bp,       url_prefix="/api")
     app.register_blueprint(stt_bp,       url_prefix="/api")
     app.register_blueprint(gesture_bp,   url_prefix="/api")
+    app.register_blueprint(fusion_bp,    url_prefix="/api")
 
     # ─── Health check ─────────────────────────────────────────────────────────
     @app.get("/health")
