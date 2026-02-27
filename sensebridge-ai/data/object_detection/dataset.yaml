@@ -1,0 +1,43 @@
+# SenseBridge Object Detection Dataset Configuration
+# Place this file at: data/object_detection/dataset.yaml
+# Compatible with YOLOv8 training format
+
+path: data/object_detection          # dataset root (relative to train.py)
+train: images/train                  # train images
+val:   images/val                    # validation images
+test:  images/test                   # test images (optional)
+
+# Number of classes
+nc: 12
+
+# Class names (fine-tuned assistive categories)
+names:
+  0:  person
+  1:  car
+  2:  motorcycle
+  3:  bicycle
+  4:  bus
+  5:  truck
+  6:  door
+  7:  stairs
+  8:  crosswalk
+  9:  obstacle         # generic indoor obstacle
+  10: signboard
+  11: currency_note
+
+# ─── Dataset annotation notes ──────────────────────────────────────────────
+# Format: YOLO v8 (normalized x y w h per line in .txt)
+# Tool:   Label Studio / Roboflow / CVAT
+# Augmentation handled by Ultralytics (HSV, flips, mosaic, copy-paste)
+#
+# Recommended sources:
+#   - COCO (person, car, motorcycle, bus, truck)
+#   - OpenImages (doors, stairs)
+#   - Custom capture for Indian crosswalks, signboards, currency
+#
+# Folder layout expected:
+#   data/object_detection/
+#     images/train/<frame>.jpg
+#     images/val/<frame>.jpg
+#     labels/train/<frame>.txt    ← YOLO format annotations
+#     labels/val/<frame>.txt

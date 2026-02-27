@@ -1,0 +1,51 @@
+# ─── Core AI ──────────────────────────────────────────────────────────────────
+ultralytics>=8.0.0          # YOLOv8 training + inference
+onnxruntime>=1.17.0         # ONNX inference (CPU)
+onnx>=1.15.0                # ONNX model manipulation
+opencv-python>=4.9.0        # Video/image processing
+numpy>=1.26.0
+Pillow>=10.0.0
+
+# ─── OCR ──────────────────────────────────────────────────────────────────────
+easyocr>=1.7.1
+paddlepaddle>=2.6.0; sys_platform != 'darwin'   # PaddleOCR backend
+paddleocr>=2.7.0
+
+# ─── Speech-to-Text ───────────────────────────────────────────────────────────
+openai-whisper>=20231117
+torch>=2.0.0                # Whisper dependency
+torchaudio>=2.0.0
+pyaudio>=0.2.14             # Microphone input
+sounddevice>=0.4.6          # Alternative mic backend
+webrtcvad>=2.0.10           # Voice activity detection
+jiwer>=3.0.3                # WER calculation
+
+# ─── Gesture Recognition ──────────────────────────────────────────────────────
+mediapipe>=0.10.9
+tensorflow>=2.15.0          # LSTM training
+keras>=2.15.0
+scikit-learn>=1.4.0
+
+# ─── TTS Output ───────────────────────────────────────────────────────────────
+pyttsx3>=2.90               # Offline TTS (cross-platform)
+gTTS>=2.5.1                 # Google TTS (online fallback)
+
+# ─── Flask API ────────────────────────────────────────────────────────────────
+flask>=3.0.0
+flask-cors>=4.0.0
+flask-limiter>=3.5.0
+gunicorn>=21.2.0
+
+# ─── Optimization & Metrics ──────────────────────────────────────────────────
+onnxsim>=0.4.33             # ONNX model simplifier
+psutil>=5.9.0               # Memory/CPU usage
+py-cpuinfo>=9.0.0
+
+# ─── Utilities ────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+requests>=2.31.0
+tqdm>=4.66.0
+scipy>=1.12.0
+
+# ─── Tracking ─────────────────────────────────────────────────────────────────
+supervision>=0.18.0         # ByteTracker wrapper for YOLO
