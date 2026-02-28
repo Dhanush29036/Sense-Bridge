@@ -17,6 +17,6 @@ const updateRules = [
 router.use(protect); // All preference routes require auth
 
 router.get('/', getPreferences);
-router.put('/', updateRules, validate, updatePreferences);
+router.put('/', ...updateRules, validate, updatePreferences);
 
 module.exports = router;

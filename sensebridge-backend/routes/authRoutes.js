@@ -29,8 +29,8 @@ const loginRules = [
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-router.post('/register', authLimiter, registerRules, validate, register);
-router.post('/login', authLimiter, loginRules, validate, login);
+router.post('/register', authLimiter, ...registerRules, validate, register);
+router.post('/login', authLimiter, ...loginRules, validate, login);
 router.get('/me', protect, getMe);
 
 module.exports = router;

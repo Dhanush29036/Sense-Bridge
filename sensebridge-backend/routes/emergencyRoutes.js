@@ -12,19 +12,24 @@
 
 const express = require('express');
 const router = express.Router();
-const auth = require('../middleware/auth');
+const { protect: auth } = require('../middleware/auth');
 const EmergencyLog = require('../models/EmergencyLog');
 const EmergencyContact = require('../models/EmergencyContact');
 const User = require('../models/User');
 
-// Optional: Twilio for SMS, replace with any SMS provider
-let twilioClient = null;
-try {
-    const twilio = require('twilio');
-    twilioClient = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
-} catch (_) {
-    console.warn('[Emergency] Twilio not installed — SMS disabled. pip install twilio');
-}
+// Twilio is optional — only loaded when credentials are present
+// Install with: npm install twilio
+const getTwilioClient = () => {
+    if (!process.env.TWILIO_SID || !process.env.TWILIO_AUTH_TOKEN) return null;
+    try {
+        // eslint-disable-next-line import/no-extraneous-dependencies
+        const Twilio = require('twilio'); // eslint-disable-line global-require
+        return Twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
+    } catch {
+        console.warn('[Emergency] twilio package not installed — SMS skipped.');
+        return null;
+    }
+};
 
 
 // ─── POST /api/emergency/sos ─────────────────────────────────────────────────
@@ -69,6 +74,7 @@ router.post('/sos', auth, async (req, res) => {
 
         // 3. Fetch contacts and send SMS
         const contacts = await EmergencyContact.find({ user: userId });
+        const twilioClient = getTwilioClient();
         const results = [];
 
         for (const contact of contacts) {

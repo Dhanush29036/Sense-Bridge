@@ -36,7 +36,7 @@ const updateContactRules = [
 
 router.use(protect);
 
-router.route('/').get(getContacts).post(contactRules, validate, addContact);
-router.route('/:id').put(updateContactRules, validate, updateContact).delete(deleteContact);
+router.route('/').get(getContacts).post(...contactRules, validate, addContact);
+router.route('/:id').put(...updateContactRules, validate, updateContact).delete(deleteContact);
 
 module.exports = router;

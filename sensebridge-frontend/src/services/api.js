@@ -63,4 +63,24 @@ export const logService = {
     clear: () => api.delete('/logs'),
 };
 
+export const emergencyService = {
+    /** Fire the SOS — sends SMS to saved contacts via backend */
+    sos: (payload) => api.post('/emergency/sos', payload),
+    /** Fetch this user's emergency event history */
+    history: (userId) => api.get(`/emergency/history/${userId}`),
+    /** Cancel a pending alert by event ID */
+    cancel: (eventId) => api.put(`/emergency/cancel/${eventId}`),
+};
+
+export const fusionService = {
+    /** Run the multimodal fusion engine decision on all current signals */
+    fuse: (payload) => api.post('/fuse', payload),
+    /** Suppress a label for N seconds */
+    dismiss: (label, duration_s = 30) => api.post('/fuse/dismiss', { label, duration_s }),
+    /** Get last 5 fusion alerts */
+    history: () => api.get('/fuse/history'),
+    /** Reset fusion engine state (e.g. on mode change) */
+    reset: () => api.post('/fuse/reset'),
+};
+
 export default api;
