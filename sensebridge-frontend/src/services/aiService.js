@@ -1,124 +1,222 @@
 import { logService } from './api';
+import * as tf from '@tensorflow/tfjs';
+import '@tensorflow/tfjs-backend-webgl';
+import * as cocoSsd from '@tensorflow-models/coco-ssd';
+import * as handPoseDetection from '@tensorflow-models/hand-pose-detection';
 
-/**
- * AI Module Placeholders
- * ─────────────────────────────────────────────────────────
- * These functions mimic the interface that real AI services
- * (YOLO, Whisper, MediaPipe) will ultimately fill.
- * Replace the body of each function when wiring real models.
- */
+// ─── Object Detection (YOLO / COCO-SSD) ────────────────────────────────────
 
-// ─── Object Detection (YOLO) ───────────────────────────────────────────────
+let _visionModel = null;
+let _visionActive = false;
+let _visionRaf = null;
 
-let _objectDetectionInterval = null;
+export const startObjectDetection = async (videoElement, onDetection) => {
+    console.info('[AI] Object detection starting...');
+    _visionActive = true;
 
-export const startObjectDetection = (onDetection) => {
-    console.info('[AI] Object detection started (placeholder)');
+    if (!_visionModel) {
+        await tf.ready();
+        _visionModel = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    }
 
-    // Simulate YOLO detections every 3 seconds
-    _objectDetectionInterval = setInterval(() => {
-        const mockDetections = [
-            { label: 'person', confidence: 0.92, bbox: [120, 80, 200, 300] },
-            { label: 'car', confidence: 0.78, bbox: [300, 150, 480, 250] },
-        ];
-        const result = {
-            detections: mockDetections,
-            timestamp: new Date().toISOString(),
-        };
-        onDetection?.(result);
+    let lastLogTime = 0;
 
-        // Auto-log critical detections to backend
-        const highConf = mockDetections.filter((d) => d.confidence > 0.85);
-        if (highConf.length) {
-            logService.create({
-                eventType: 'object_detection',
-                message: `Detected: ${highConf.map((d) => d.label).join(', ')}`,
-                severity: 'warning',
-                confidence: Math.max(...highConf.map((d) => d.confidence)),
-                metadata: { detections: mockDetections, model: 'YOLOv8-placeholder' },
-            }).catch(console.error);
+    const detectFrame = async () => {
+        if (!_visionActive) return;
+        if (videoElement.readyState === 4) {
+            const predictions = await _visionModel.detect(videoElement);
+
+            // Map bounding boxes to percentages
+            const width = videoElement.videoWidth;
+            const height = videoElement.videoHeight;
+
+            const detections = predictions.map(p => ({
+                label: p.class,
+                confidence: p.score,
+                bbox: p.bbox, // [x, y, width, height]
+                pctBbox: [
+                    (p.bbox[0] / width) * 100,
+                    (p.bbox[1] / height) * 100,
+                    (p.bbox[2] / width) * 100,
+                    (p.bbox[3] / height) * 100
+                ]
+            }));
+
+            onDetection?.({ detections, timestamp: Date.now() });
+
+            // Log high confidence detections throttle to once every 3 sec
+            const highConf = detections.filter(d => d.confidence > 0.65);
+            if (highConf.length && Date.now() - lastLogTime > 3000) {
+                lastLogTime = Date.now();
+                logService.create({
+                    eventType: 'object_detection',
+                    message: `Detected: ${highConf.map(d => d.label).join(', ')}`,
+                    severity: 'warning',
+                    confidence: Math.max(...highConf.map(d => d.confidence)),
+                    metadata: { detections, model: 'coco-ssd-lite' }
+                }).catch(console.error);
+            }
         }
-    }, 3000);
+        _visionRaf = requestAnimationFrame(detectFrame);
+    };
+
+    detectFrame();
 
     return () => stopObjectDetection();
 };
 
 export const stopObjectDetection = () => {
-    if (_objectDetectionInterval) {
-        clearInterval(_objectDetectionInterval);
-        _objectDetectionInterval = null;
-        console.info('[AI] Object detection stopped');
-    }
+    _visionActive = false;
+    if (_visionRaf) cancelAnimationFrame(_visionRaf);
+    console.info('[AI] Object detection stopped');
 };
 
-// ─── Speech Recognition (Whisper) ─────────────────────────────────────────
+// ─── Speech Recognition (Web Speech API) ──────────────────────────────────
 
-let _speechRecognitionActive = false;
+let _recognition = null;
 
-export const startSpeechRecognition = (onTranscript, language = 'en') => {
-    console.info('[AI] Speech recognition started (placeholder) — lang:', language);
-    _speechRecognitionActive = true;
+export const startSpeechRecognition = (onTranscript, language = 'en-US') => {
+    console.info('[AI] Speech recognition starting — lang:', language);
 
-    // In production: connect to Whisper microservice WebSocket
-    // Placeholder: emit a fake transcript every 5s
-    const interval = setInterval(() => {
-        if (!_speechRecognitionActive) return;
-        const phrases = [
-            'Hello, how can I help you?',
-            'Please proceed to the next corridor.',
-            'Obstacle detected ahead.',
-        ];
-        const transcript = phrases[Math.floor(Math.random() * phrases.length)];
-        onTranscript?.({ text: transcript, confidence: 0.94, language });
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        console.error('Speech Recognition API not supported in this browser.');
+        return () => { };
+    }
 
-        logService.create({
-            eventType: 'speech_to_text',
-            message: transcript,
-            confidence: 0.94,
-            metadata: { model: 'whisper-placeholder', language },
-        }).catch(console.error);
-    }, 5000);
+    _recognition = new SpeechRecognition();
+    _recognition.continuous = true;
+    _recognition.interimResults = true;
+    _recognition.lang = language;
 
-    return () => {
-        _speechRecognitionActive = false;
-        clearInterval(interval);
-        console.info('[AI] Speech recognition stopped');
+    let lastLoggedTranscript = '';
+
+    _recognition.onresult = (event) => {
+        let finalTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+                finalTranscript += event.results[i][0].transcript;
+                const conf = event.results[i][0].confidence || 0.9;
+
+                if (finalTranscript.trim() && finalTranscript !== lastLoggedTranscript) {
+                    lastLoggedTranscript = finalTranscript;
+                    onTranscript?.({ text: finalTranscript, confidence: conf, language });
+
+                    logService.create({
+                        eventType: 'speech_to_text',
+                        message: finalTranscript,
+                        confidence: conf,
+                        metadata: { model: 'web-speech-api', language },
+                    }).catch(console.error);
+                }
+            }
+        }
     };
+
+    _recognition.onerror = (e) => console.error('[AI] Speech Error:', e.error);
+
+    // Auto restart if it stops while supposedly active
+    _recognition.onend = () => {
+        if (_recognition) {
+            try { _recognition.start(); } catch { }
+        }
+    };
+
+    try { _recognition.start(); } catch { }
+
+    return () => stopSpeechRecognition();
 };
 
 export const stopSpeechRecognition = () => {
-    _speechRecognitionActive = false;
+    if (_recognition) {
+        _recognition.onend = null;
+        _recognition.stop();
+        _recognition = null;
+    }
+    console.info('[AI] Speech recognition stopped');
 };
 
-// ─── Gesture Recognition (MediaPipe) ──────────────────────────────────────
+// ─── Gesture Recognition (Handpose) ────────────────────────────────────────
 
-let _gestureInterval = null;
+let _gestureModel = null;
+let _gestureActive = false;
+let _gestureRaf = null;
 
-export const startGestureRecognition = (onGesture) => {
-    console.info('[AI] Gesture recognition started (placeholder)');
+export const startGestureRecognition = async (videoElement, onGesture) => {
+    console.info('[AI] Gesture recognition starting (MediaPipe Hands)...');
+    _gestureActive = true;
 
-    const gestures = ['thumbs_up', 'peace', 'open_palm', 'pointing', 'fist'];
+    if (!_gestureModel) {
+        await tf.setBackend('webgl');
+        await tf.ready();
+        const model = handPoseDetection.SupportedModels.MediaPipeHands;
+        _gestureModel = await handPoseDetection.createDetector(model, {
+            runtime: 'tfjs',
+            modelType: 'lite',
+            maxHands: 1,
+        });
+    }
 
-    _gestureInterval = setInterval(() => {
-        const gesture = gestures[Math.floor(Math.random() * gestures.length)];
-        const result = { gesture, confidence: 0.88, timestamp: Date.now() };
-        onGesture?.(result);
+    let lastLogTime = 0;
 
-        logService.create({
-            eventType: 'gesture',
-            message: `Gesture: ${gesture}`,
-            confidence: 0.88,
-            metadata: { model: 'mediapipe-placeholder', gesture },
-        }).catch(console.error);
-    }, 2500);
+    const detectFrame = async () => {
+        if (!_gestureActive) return;
+        if (videoElement.readyState >= 2) {
+            try {
+                const hands = await _gestureModel.estimateHands(videoElement, { flipHorizontal: true });
+                if (hands.length > 0) {
+                    const keypoints = hands[0].keypoints;
+                    const gesture = determineGesture(keypoints);
+                    if (gesture && gesture !== 'unknown' && Date.now() - lastLogTime > 1500) {
+                        onGesture?.({ gesture, confidence: hands[0].score ?? 0.85, timestamp: Date.now() });
+                        lastLogTime = Date.now();
+                        logService.create({
+                            eventType: 'gesture',
+                            message: `Gesture: ${gesture}`,
+                            confidence: hands[0].score ?? 0.85,
+                            metadata: { model: 'mediapipe-hands-tfjs', gesture },
+                        }).catch(console.error);
+                    }
+                }
+            } catch (e) { /* ignore frame errors */ }
+        }
+        setTimeout(() => {
+            if (_gestureActive) _gestureRaf = requestAnimationFrame(detectFrame);
+        }, 80);
+    };
 
+    detectFrame();
     return () => stopGestureRecognition();
 };
 
 export const stopGestureRecognition = () => {
-    if (_gestureInterval) {
-        clearInterval(_gestureInterval);
-        _gestureInterval = null;
-        console.info('[AI] Gesture recognition stopped');
-    }
+    _gestureActive = false;
+    if (_gestureRaf) cancelAnimationFrame(_gestureRaf);
+    console.info('[AI] Gesture recognition stopped');
 };
+
+// ── Gesture heuristic from MediaPipe 21 keypoints ─────────────────────────
+// keypoints array: thumb(0-4), index(5-8), middle(9-12), ring(13-16), pinky(17-20)
+function determineGesture(kp) {
+    // Use y-coordinates: smaller y = higher on screen (video coords)
+    const tip = (i) => kp[i];
+    const mcp = (i) => kp[i]; // metacarpal base
+
+    const fingerExtended = (tipIdx, mcpIdx) =>
+        tip(tipIdx).y < mcp(mcpIdx).y; // tip higher than base = extended
+
+    const indexUp = fingerExtended(8, 5);
+    const middleUp = fingerExtended(12, 9);
+    const ringUp = fingerExtended(16, 13);
+    const pinkyUp = fingerExtended(20, 17);
+
+    // Thumb: compare tip.x to ip.x (landmark 3) — mirrored video
+    const thumbUp = kp[4].y < kp[3].y && kp[3].y < kp[2].y;
+
+    if (thumbUp && !indexUp && !middleUp && !ringUp && !pinkyUp) return 'thumbs_up';
+    if (!indexUp && !middleUp && !ringUp && !pinkyUp && !thumbUp) return 'fist';
+    if (indexUp && middleUp && !ringUp && !pinkyUp) return 'peace';
+    if (indexUp && !middleUp && !ringUp && !pinkyUp) return 'pointing';
+    if (indexUp && middleUp && ringUp && pinkyUp) return 'open_palm';
+    return 'unknown';
+}
