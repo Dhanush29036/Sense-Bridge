@@ -17,6 +17,7 @@ const preferenceRoutes = require('./routes/preferenceRoutes');
 const emergencyContactRoutes = require('./routes/emergencyContactRoutes');
 const logRoutes = require('./routes/logRoutes');
 const emergencyRoutes = require('./routes/emergencyRoutes');
+const aiRoutes = require('./routes/aiRoutes');
 
 // ─── Database ──────────────────────────────────────────────────────────────────
 connectDB();
@@ -70,6 +71,7 @@ app.use('/api/preferences', preferenceRoutes);
 app.use('/api/emergency-contacts', emergencyContactRoutes);
 app.use('/api/logs', logRoutes);
 app.use('/api/emergency', emergencyRoutes);
+app.use('/api/ai', aiRoutes);
 
 // ─── 404 handler ──────────────────────────────────────────────────────────────
 app.use((req, res) => {

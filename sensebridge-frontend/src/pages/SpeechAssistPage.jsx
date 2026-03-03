@@ -23,7 +23,8 @@ const BAR_COUNT = 24;
 
 const SpeechAssistPage = () => {
     const [active, setActive] = useState(false);
-    const [captions, setCaptions] = useState([]);
+    const [captions, setCaptions] = useState([]);   // committed final captions
+    const [interimText, setInterimText] = useState('');  // live word-by-word preview
     const [barHeights, setBarHeights] = useState(Array(BAR_COUNT).fill(15));
     const [language, setLanguage] = useState('en-US');
     const captionEndRef = useRef(null);
@@ -76,13 +77,21 @@ const SpeechAssistPage = () => {
     useEffect(() => {
         if (!active) return;
         startVisualizer();
+        setInterimText('');
         const stop = startSpeechRecognition((result) => {
-            setCaptions((prev) => [
-                ...prev,
-                { id: Date.now(), text: result.text, confidence: result.confidence, time: new Date().toLocaleTimeString() }
-            ].slice(-30));
+            if (result.isFinal) {
+                // Committed sentence — add to captions list, clear interim
+                setInterimText('');
+                setCaptions((prev) => [
+                    ...prev,
+                    { id: Date.now(), text: result.text, confidence: result.confidence, time: new Date().toLocaleTimeString() }
+                ].slice(-30));
+            } else {
+                // Interim — update live preview immediately (fires on every word)
+                setInterimText(result.text);
+            }
         }, language);
-        return () => { stop(); stopVisualizer(); };
+        return () => { stop(); stopVisualizer(); setInterimText(''); };
     }, [active, language, startVisualizer, stopVisualizer]);
 
     // Auto-scroll captions
@@ -151,21 +160,44 @@ const SpeechAssistPage = () => {
                 </div>
 
                 {/* Caption display */}
-                <div className="card" style={{ minHeight: 300, maxHeight: 400, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+                <div className="card" style={{ minHeight: 300, maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
                     <div style={{ fontWeight: 600, fontSize: '0.875rem', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
                         <Volume2 size={16} /> Live Captions
+                        {active && <span style={{ marginLeft: 'auto', fontSize: '0.72rem', color: 'var(--text-muted)' }}>Interim words shown instantly</span>}
                     </div>
-                    {captions.length === 0 ? (
+
+                    {/* ── Live interim preview (updates word-by-word) ─────────── */}
+                    {active && (
+                        <div style={{
+                            padding: '10px 14px', borderRadius: 10, marginBottom: 8,
+                            background: 'rgba(0,212,170,0.06)',
+                            border: `1px solid ${interimText ? 'rgba(0,212,170,0.4)' : 'rgba(0,212,170,0.1)'}`,
+                            minHeight: 44, display: 'flex', alignItems: 'center',
+                            transition: 'border-color 0.1s',
+                        }}>
+                            {interimText ? (
+                                <span style={{ fontSize: '1.05rem', color: 'rgba(255,255,255,0.6)', fontStyle: 'italic', letterSpacing: '0.01em' }}>
+                                    {interimText}
+                                    <span style={{ display: 'inline-block', width: 2, height: '1em', background: 'var(--color-accent)', marginLeft: 3, verticalAlign: 'text-bottom', animation: 'blink 1s step-end infinite' }} />
+                                </span>
+                            ) : (
+                                <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Listening… speak now</span>
+                            )}
+                        </div>
+                    )}
+
+                    {/* ── Committed final captions ──────────────────────────── */}
+                    {captions.length === 0 && !interimText ? (
                         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                            {active ? 'Waiting for speech...' : 'Start listening to see captions here'}
+                            {active ? 'Waiting for speech…' : 'Start listening to see captions'}
                         </div>
                     ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                             {captions.map((c) => (
                                 <div key={c.id} style={{ padding: '10px 14px', borderRadius: 10, background: 'var(--bg-base)', borderLeft: '3px solid var(--color-accent)' }}>
                                     <div style={{ fontSize: '1rem', marginBottom: 4 }}>{c.text}</div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                        <span>Confidence: {(c.confidence * 100).toFixed(0)}%</span>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                        <span>{c.confidence > 0 ? `${(c.confidence * 100).toFixed(0)}% confidence` : ''}</span>
                                         <span>{c.time}</span>
                                     </div>
                                 </div>
