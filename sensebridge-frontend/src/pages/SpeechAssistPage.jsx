@@ -33,6 +33,18 @@ const SpeechAssistPage = () => {
     const rafRef = useRef(null);
     const streamRef = useRef(null);
 
+    // ── Voice command support (vc:start / vc:stop events from VoiceCommandContext) ──
+    useEffect(() => {
+        const onStart = () => setActive(true);
+        const onStop  = () => setActive(false);
+        window.addEventListener('vc:start', onStart);
+        window.addEventListener('vc:stop',  onStop);
+        return () => {
+            window.removeEventListener('vc:start', onStart);
+            window.removeEventListener('vc:stop',  onStop);
+        };
+    }, []);
+
     // ── Web Audio visualizer ────────────────────────────────────────────────
     const startVisualizer = useCallback(async () => {
         try {

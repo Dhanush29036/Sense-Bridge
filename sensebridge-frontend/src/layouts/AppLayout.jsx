@@ -2,24 +2,27 @@ import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
+import { useVoiceCommands } from '../context/VoiceCommandContext';
 import {
-    Eye, Mic, Hand, LayoutDashboard, Settings,
-    AlertTriangle, ScrollText, LogOut, Sun, Moon, Contrast, ChevronLeft, Menu
+    Eye, Mic, MicOff, Hand, LayoutDashboard, Settings,
+    AlertTriangle, ScrollText, LogOut, Sun, Moon, Contrast, ChevronLeft, Menu, Navigation
 } from 'lucide-react';
 
 const NAV_ITEMS = [
-    { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { to: '/vision', label: 'Vision Assist', icon: Eye },
-    { to: '/speech', label: 'Speech Assist', icon: Mic },
-    { to: '/gesture', label: 'Gesture Assist', icon: Hand },
-    { to: '/logs', label: 'Logs', icon: ScrollText },
-    { to: '/emergency', label: 'Emergency', icon: AlertTriangle, danger: true },
-    { to: '/settings', label: 'Settings', icon: Settings },
+    { to: '/dashboard', label: 'Dashboard',       icon: LayoutDashboard },
+    { to: '/vision',    label: 'Vision Assist',   icon: Eye },
+    { to: '/speech',    label: 'Speech Assist',   icon: Mic },
+    { to: '/gesture',   label: 'Gesture Assist',  icon: Hand },
+    { to: '/navigation',label: 'Navigation',      icon: Navigation },
+    { to: '/logs',      label: 'Logs',            icon: ScrollText },
+    { to: '/emergency', label: 'Emergency',       icon: AlertTriangle, danger: true },
+    { to: '/settings',  label: 'Settings',        icon: Settings },
 ];
 
 const AppLayout = ({ children }) => {
     const { user, logout } = useAuth();
     const { theme, setTheme } = useTheme();
+    const { enabled: vcEnabled, setEnabled: setVcEnabled, listening, feedback } = useVoiceCommands();
     const navigate = useNavigate();
     const [collapsed, setCollapsed] = useState(false);
 
@@ -112,12 +115,48 @@ const AppLayout = ({ children }) => {
                 <header style={{
                     height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     padding: '0 1.5rem', background: 'var(--bg-surface)',
-                    borderBottom: '1px solid var(--border-color)', flexShrink: 0,
+                    borderBottom: '1px solid var(--border-color)', flexShrink: 0, position: 'relative',
                 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <Menu size={20} style={{ color: 'var(--text-muted)', cursor: 'pointer' }} onClick={() => setCollapsed(c => !c)} />
                     </div>
+
+                    {/* Voice command feedback bubble */}
+                    {feedback && (
+                        <div style={{
+                            position: 'absolute', left: '50%', transform: 'translateX(-50%)',
+                            background: 'rgba(108,99,255,0.95)', color: '#fff',
+                            padding: '5px 16px', borderRadius: 20, fontSize: '0.78rem', fontWeight: 600,
+                            whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 200,
+                            boxShadow: '0 4px 20px rgba(108,99,255,0.4)',
+                            animation: 'fadeIn 0.15s ease',
+                        }}>
+                            🎙 {feedback}
+                        </div>
+                    )}
+
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        {/* Voice command toggle */}
+                        <button
+                            onClick={() => setVcEnabled(v => !v)}
+                            title={`Voice Commands ${vcEnabled ? 'ON' : 'OFF'} (Alt+V)`}
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: 5,
+                                padding: '5px 12px', borderRadius: 20, border: 'none', cursor: 'pointer',
+                                background: vcEnabled ? 'rgba(0,212,170,0.15)' : 'var(--bg-base)',
+                                color: vcEnabled ? 'var(--color-accent)' : 'var(--text-muted)',
+                                fontSize: '0.75rem', fontWeight: 600, transition: 'all 0.2s',
+                                boxShadow: listening ? '0 0 0 2px var(--color-accent)' : 'none',
+                            }}
+                        >
+                            {vcEnabled && listening
+                                ? <Mic size={14} style={{ animation: 'pulse 1s ease-in-out infinite' }} />
+                                : vcEnabled
+                                ? <Mic size={14} />
+                                : <MicOff size={14} />}
+                            {vcEnabled ? (listening ? 'Listening…' : 'Voice On') : 'Voice Off'}
+                        </button>
+
                         <div style={{
                             width: 36, height: 36, borderRadius: '50%',
                             background: 'linear-gradient(135deg, var(--color-primary), var(--color-accent))',

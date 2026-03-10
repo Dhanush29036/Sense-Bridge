@@ -48,6 +48,260 @@ function iou([x1, y1, w1, h1], [x2, y2, w2, h2]) {
     return inter / (w1 * h1 + w2 * h2 - inter);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// OBSTACLE TRACKER — multi-frame IoU tracking + velocity-based prediction
+//
+// Tracks detected bounding boxes across frames using IoU matching.
+// Computes per-object velocity vectors to predict if an obstacle is
+// APPROACHING (bbox growing AND moving toward frame centre) or PASSING.
+// Gives directional guidance: "from left" / "from right" / "ahead".
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Objects that can actively move toward you while walking */
+const MOVING_CLASSES = new Set(['person', 'bicycle', 'car', 'motorcycle', 'bus', 'truck', 'dog', 'cat', 'horse']);
+
+export class ObstacleTracker {
+    constructor() {
+        this.tracks   = new Map();   // trackId → { label, history: [{cx,cy,area,t}] }
+        this._nextId  = 0;
+        this.MAX_HIST = 8;           // frames to keep in history
+        this.MAX_AGE  = 500;         // ms before a track is considered lost
+    }
+
+    /**
+     * Update tracker with the latest detections.
+     * @param {Array}  detections   — from COCO-SSD (with pctBbox)
+     * @param {number} W, H         — video dimensions
+     * @returns {Array} enriched detections with .motion added to moving ones
+     */
+    update(detections, W = 640, H = 480) {
+        const now    = performance.now();
+        const moving = detections.filter(d => MOVING_CLASSES.has(d.label));
+
+        // ── Match new detections to existing tracks (greedy IoU) ─────────
+        const matched     = new Set();   // track IDs matched this frame
+        const usedDet     = new Set();   // detection indices already matched
+
+        for (const [id, track] of this.tracks) {
+            let bestIou = 0.25, bestIdx = -1;
+            moving.forEach((d, i) => {
+                if (usedDet.has(i) || d.label !== track.label) return;
+                const score = iou(
+                    this._pctToAbsBbox(track.history.at(-1), W, H),
+                    d.bbox
+                );
+                if (score > bestIou) { bestIou = score; bestIdx = i; }
+            });
+
+            if (bestIdx >= 0) {
+                const d   = moving[bestIdx];
+                const cx  = d.bbox[0] + d.bbox[2] / 2;
+                const cy  = d.bbox[1] + d.bbox[3] / 2;
+                const area= d.bbox[2] * d.bbox[3];
+                track.history.push({ cx, cy, area, t: now });
+                if (track.history.length > this.MAX_HIST) track.history.shift();
+                matched.add(id);
+                usedDet.add(bestIdx);
+                track.lastSeen = now;
+            }
+        }
+
+        // ── Spawn new tracks for unmatched detections ────────────────────
+        moving.forEach((d, i) => {
+            if (usedDet.has(i)) return;
+            const cx  = d.bbox[0] + d.bbox[2] / 2;
+            const cy  = d.bbox[1] + d.bbox[3] / 2;
+            const area= d.bbox[2] * d.bbox[3];
+            this.tracks.set(this._nextId++, {
+                label:    d.label,
+                history:  [{ cx, cy, area, t: now }],
+                lastSeen: now,
+            });
+        });
+
+        // ── Prune stale tracks ───────────────────────────────────────────
+        for (const [id, track] of this.tracks) {
+            if (now - track.lastSeen > this.MAX_AGE) this.tracks.delete(id);
+        }
+
+        // ── Enrich detections with motion verdict ────────────────────────
+        return detections.map(d => {
+            if (!MOVING_CLASSES.has(d.label)) return d;
+            const motion = this._getMotion(d, W, H);
+            return motion ? { ...d, motion } : d;
+        });
+    }
+
+    /** Compute motion verdict for a detection by finding its matching track */
+    _getMotion(det, W, H) {
+        // Find the track whose last position is closest to this detection
+        let bestTrack = null, bestDist = Infinity;
+        const cx = det.bbox[0] + det.bbox[2] / 2;
+        const cy = det.bbox[1] + det.bbox[3] / 2;
+
+        for (const [, track] of this.tracks) {
+            if (track.label !== det.label || track.history.length < 3) continue;
+            const last = track.history.at(-1);
+            const d    = Math.hypot(cx - last.cx, cy - last.cy);
+            if (d < bestDist) { bestDist = d; bestTrack = track; }
+        }
+
+        if (!bestTrack || bestTrack.history.length < 3) return null;
+
+        const hist   = bestTrack.history;
+        const oldest = hist[0];
+        const latest = hist.at(-1);
+        const dt     = (latest.t - oldest.t) / 1000;   // seconds
+        if (dt < 0.1) return null;
+
+        // Velocity in pixels/sec
+        const vx   = (latest.cx  - oldest.cx)  / dt;
+        const vy   = (latest.cy  - oldest.cy)  / dt;
+        const va   = (latest.area - oldest.area) / dt;
+
+        // Approaching = bbox growing + object moving toward centre
+        const frameCx    = W / 2;
+        const frameCy    = H / 2;
+        const toCentre   = (frameCx - latest.cx) * vx + (frameCy - latest.cy) * vy;
+        const speed      = Math.hypot(vx, vy);
+        const approaching= va > 500 && toCentre > 0;  // area growing && moving toward camera
+        const passing    = !approaching && speed > 30;
+
+        // Direction from user's perspective (front-facing camera, so x is mirrored)
+        const pctCx = latest.cx / W;
+        const direction = pctCx < 0.33 ? 'right'    // camera mirrored
+                        : pctCx > 0.67 ? 'left'
+                        :                'ahead';
+
+        return {
+            approaching,
+            passing,
+            direction,
+            speed: Math.round(speed),
+            verdict: approaching
+                ? `${det.label} approaching from ${direction}`
+                : passing
+                ? `${det.label} passing on ${direction}`
+                : null,
+        };
+    }
+
+    _pctToAbsBbox({ cx, cy, area }, W, H) {
+        // Reconstruct a rough bbox from centre + area (square approximation)
+        const side = Math.sqrt(area);
+        return [cx - side / 2, cy - side / 2, side, side];
+    }
+
+    reset() { this.tracks.clear(); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HAZARD DETECTOR — pixel-level staircase, drop & slope detection
+//
+// Samples the bottom 40% of the video frame via canvas pixel data.
+// Uses two signals:
+//   1. Horizontal edge density (Sobel-X) in stripes → stair pattern
+//   2. Central-column vertical brightness gradient  → drop/pit
+// ═══════════════════════════════════════════════════════════════════════════
+
+let _hazardCanvas  = null;
+let _hazardCtx     = null;
+const SAMPLE_W     = 80;   // downsample to 80×60 px (fast!)
+const SAMPLE_H     = 60;
+const FLOOR_START  = 0.60; // analyse rows from 60% of frame height down
+
+/**
+ * Analyse a video frame for staircase and drop hazards.
+ * Returns { stair, drop, slope, confidence } — nulls if nothing detected.
+ * Call every ~10 frames (not every frame) for performance.
+ */
+export function analyzeFrameForHazards(videoElement) {
+    if (!videoElement || videoElement.readyState < 2) return null;
+
+    // Lazy-create offscreen canvas
+    if (!_hazardCanvas) {
+        _hazardCanvas = document.createElement('canvas');
+        _hazardCanvas.width  = SAMPLE_W;
+        _hazardCanvas.height = SAMPLE_H;
+        _hazardCtx = _hazardCanvas.getContext('2d', { willReadFrequently: true });
+    }
+
+    // Draw the lower portion of the video onto our tiny canvas
+    const vW = videoElement.videoWidth  || 640;
+    const vH = videoElement.videoHeight || 480;
+    const cropY   = vH * FLOOR_START;
+    const cropH   = vH * (1 - FLOOR_START);
+
+    _hazardCtx.drawImage(
+        videoElement,
+        0, cropY, vW, cropH,          // source: lower 40%
+        0, 0,   SAMPLE_W, SAMPLE_H    // dest: tiny canvas
+    );
+
+    let imgData;
+    try { imgData = _hazardCtx.getImageData(0, 0, SAMPLE_W, SAMPLE_H); }
+    catch { return null; }
+
+    const pix  = imgData.data;
+    const toIdx= (x, y) => (y * SAMPLE_W + x) * 4;
+    const gray = (x, y) => {
+        const i = toIdx(x, y);
+        return 0.299 * pix[i] + 0.587 * pix[i+1] + 0.114 * pix[i+2];
+    };
+
+    // ── 1. Horizontal edge density per row (Sobel-Y kernel) ──────────────
+    //    High-edge rows = horizontal lines → stair risers
+    const rowEdge = [];
+    for (let y = 1; y < SAMPLE_H - 1; y++) {
+        let edgeSum = 0;
+        for (let x = 1; x < SAMPLE_W - 1; x++) {
+            const gy = gray(x, y+1) - gray(x, y-1);   // vertical gradient = horizontal edge
+            edgeSum += Math.abs(gy);
+        }
+        rowEdge.push(edgeSum / SAMPLE_W);
+    }
+
+    // Stair pattern: alternating high/low edge rows with regularity
+    const edgeMean = rowEdge.reduce((s, v) => s + v, 0) / rowEdge.length;
+    const edgeThresh = edgeMean * 1.6;
+    let highEdgeCount = 0, transitions = 0, wasHigh = false;
+    for (const e of rowEdge) {
+        const isHigh = e > edgeThresh;
+        if (isHigh) highEdgeCount++;
+        if (isHigh !== wasHigh) transitions++;
+        wasHigh = isHigh;
+    }
+    const stairScore = transitions >= 6 && highEdgeCount > 4;
+
+    // ── 2. Central-column vertical brightness gradient → drop ahead ───────
+    //    In a drop scenario the floor disappears → brightness changes sharply
+    const midX = Math.floor(SAMPLE_W / 2);
+    let brightTop = 0, brightBot = 0;
+    const midH = Math.floor(SAMPLE_H / 2);
+    for (let y = 0; y < midH; y++)     brightTop += gray(midX, y);
+    for (let y = midH; y < SAMPLE_H; y++) brightBot += gray(midX, y);
+    brightTop /= midH;
+    brightBot /= (SAMPLE_H - midH);
+
+    // Drop: lower half much darker than upper half (void/pit below)
+    const dropScore = brightTop > 80 && brightBot < brightTop * 0.55;
+
+    // ── 3. Slope: sustained brightness gradient across full column ─────────
+    let slopeGrad = 0;
+    for (let y = 0; y < SAMPLE_H - 4; y++) slopeGrad += gray(midX, y+4) - gray(midX, y);
+    const slopeScore = Math.abs(slopeGrad / SAMPLE_H) > 8;
+
+    if (!stairScore && !dropScore && !slopeScore) return null;
+
+    return {
+        stair:      stairScore,
+        drop:       dropScore,
+        slope:      slopeScore && !stairScore && !dropScore,
+        confidence: stairScore ? 0.75 : dropScore ? 0.80 : 0.65,
+    };
+}
+
+
 export const startObjectDetection = async (videoElement, onDetection) => {
     console.info('[Vision] Starting object detection…');
     _visionActive = true;

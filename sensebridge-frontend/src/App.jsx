@@ -3,6 +3,7 @@ import { Toaster } from 'react-hot-toast';
 
 import { AuthProvider } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { VoiceCommandProvider } from './context/VoiceCommandContext';
 import ProtectedRoute from './components/ProtectedRoute';
 
 // Auth pages
@@ -14,6 +15,7 @@ import DashboardPage from './pages/DashboardPage';
 import VisionAssistPage from './pages/VisionAssistPage';
 import SpeechAssistPage from './pages/SpeechAssistPage';
 import GestureAssistPage from './pages/GestureAssistPage';
+import NavigationPage from './pages/NavigationPage';
 import SettingsPage from './pages/SettingsPage';
 import EmergencyPage from './pages/EmergencyPage';
 import LogsPage from './pages/LogsPage';
@@ -22,6 +24,7 @@ const App = () => (
   <ThemeProvider>
     <AuthProvider>
       <BrowserRouter>
+        <VoiceCommandProvider>
         {/* Global toast notifications */}
         <Toaster
           position="top-right"
@@ -48,6 +51,7 @@ const App = () => (
           <Route path="/vision" element={<ProtectedRoute><VisionAssistPage /></ProtectedRoute>} />
           <Route path="/speech" element={<ProtectedRoute><SpeechAssistPage /></ProtectedRoute>} />
           <Route path="/gesture" element={<ProtectedRoute><GestureAssistPage /></ProtectedRoute>} />
+          <Route path="/navigation" element={<ProtectedRoute><NavigationPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/emergency" element={<ProtectedRoute><EmergencyPage /></ProtectedRoute>} />
           <Route path="/logs" element={<ProtectedRoute><LogsPage /></ProtectedRoute>} />
@@ -56,6 +60,7 @@ const App = () => (
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
+        </VoiceCommandProvider>
       </BrowserRouter>
     </AuthProvider>
   </ThemeProvider>
