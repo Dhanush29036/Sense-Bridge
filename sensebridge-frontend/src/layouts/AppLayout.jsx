@@ -5,19 +5,28 @@ import { useTheme } from '../context/ThemeContext';
 import { useVoiceCommands } from '../context/VoiceCommandContext';
 import {
     Eye, Mic, MicOff, Hand, LayoutDashboard, Settings,
-    AlertTriangle, ScrollText, LogOut, Sun, Moon, Contrast, ChevronLeft, Menu, Navigation
+    AlertTriangle, ScrollText, LogOut, Sun, Moon, Contrast,
+    ChevronLeft, Menu, Navigation, Crown
 } from 'lucide-react';
 
+// All nav items with role allowlists (undefined = show to everyone)
 const NAV_ITEMS = [
-    { to: '/dashboard', label: 'Dashboard',       icon: LayoutDashboard },
-    { to: '/vision',    label: 'Vision Assist',   icon: Eye },
-    { to: '/speech',    label: 'Speech Assist',   icon: Mic },
-    { to: '/gesture',   label: 'Gesture Assist',  icon: Hand },
-    { to: '/navigation',label: 'Navigation',      icon: Navigation },
-    { to: '/logs',      label: 'Logs',            icon: ScrollText },
-    { to: '/emergency', label: 'Emergency',       icon: AlertTriangle, danger: true },
-    { to: '/settings',  label: 'Settings',        icon: Settings },
+    { to: '/dashboard',  label: 'Dashboard',      icon: LayoutDashboard },
+    { to: '/vision',     label: 'Vision Assist',  icon: Eye,            roles: ['blind', 'mixed'] },
+    { to: '/speech',     label: 'Speech Assist',  icon: Mic,            roles: ['deaf',  'mixed'] },
+    { to: '/gesture',    label: 'Gesture Assist', icon: Hand,           roles: ['mute',  'deaf', 'mixed'] },
+    { to: '/navigation', label: 'Navigation',     icon: Navigation,     roles: ['blind', 'mixed'] },
+    { to: '/logs',       label: 'Logs',           icon: ScrollText },
+    { to: '/emergency',  label: 'Emergency',      icon: AlertTriangle, danger: true },
+    { to: '/settings',   label: 'Settings',       icon: Settings },
 ];
+
+const ROLE_LABEL = {
+    blind: '👁️ Vision Impaired',
+    deaf:  '👂 Hearing Impaired',
+    mute:  '🤲 Speech Impaired',
+    mixed: '⚡ Multiple Needs',
+};
 
 const AppLayout = ({ children }) => {
     const { user, logout } = useAuth();
@@ -66,21 +75,44 @@ const AppLayout = ({ children }) => {
 
                 {/* Nav Items */}
                 <nav style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, padding: '0 0.5rem' }}>
-                    {NAV_ITEMS.map(({ to, label, icon: Icon, danger }) => (
-                        <NavLink key={to} to={to} style={({ isActive }) => ({
-                            display: 'flex', alignItems: 'center', gap: '0.75rem',
-                            padding: '0.65rem 0.85rem', borderRadius: 10,
-                            textDecoration: 'none', whiteSpace: 'nowrap', overflow: 'hidden',
-                            color: isActive ? '#fff' : danger ? 'var(--color-danger)' : 'rgba(255,255,255,0.6)',
-                            background: isActive ? 'rgba(108,99,255,0.3)' : 'transparent',
-                            fontWeight: isActive ? 600 : 400,
-                            fontSize: '0.9rem',
-                            transition: 'all 0.15s ease',
-                        })}>
-                            <Icon size={18} style={{ flexShrink: 0 }} />
-                            {!collapsed && label}
-                        </NavLink>
-                    ))}
+                    {/* Admin link — only shown to admins */}
+                {user?.isAdmin && (
+                    <NavLink to="/admin" style={({ isActive }) => ({
+                        display: 'flex', alignItems: 'center', gap: '0.75rem',
+                        padding: '0.65rem 0.85rem', borderRadius: 10,
+                        textDecoration: 'none', whiteSpace: 'nowrap', overflow: 'hidden',
+                        color: isActive ? '#fff' : '#FFC600',
+                        background: isActive ? 'rgba(255,198,0,0.2)' : 'transparent',
+                        fontWeight: isActive ? 600 : 400,
+                        fontSize: '0.9rem',
+                        transition: 'all 0.15s ease',
+                        marginBottom: 4,
+                        borderBottom: '1px solid rgba(255,198,0,0.2)',
+                        paddingBottom: '0.85rem',
+                    })}>
+                        <Crown size={18} style={{ flexShrink: 0, color: '#FFC600' }} />
+                        {!collapsed && 'Admin Panel'}
+                    </NavLink>
+                )}
+
+                {/* Role-filtered nav items */}
+                {NAV_ITEMS
+                    .filter(item => !item.roles || user?.isAdmin || item.roles.includes(user?.role))
+                    .map(({ to, label, icon: Icon, danger }) => (
+                    <NavLink key={to} to={to} style={({ isActive }) => ({
+                        display: 'flex', alignItems: 'center', gap: '0.75rem',
+                        padding: '0.65rem 0.85rem', borderRadius: 10,
+                        textDecoration: 'none', whiteSpace: 'nowrap', overflow: 'hidden',
+                        color: isActive ? '#fff' : danger ? 'var(--color-danger)' : 'rgba(255,255,255,0.6)',
+                        background: isActive ? 'rgba(108,99,255,0.3)' : 'transparent',
+                        fontWeight: isActive ? 600 : 400,
+                        fontSize: '0.9rem',
+                        transition: 'all 0.15s ease',
+                    })}>
+                        <Icon size={18} style={{ flexShrink: 0 }} />
+                        {!collapsed && label}
+                    </NavLink>
+                ))}
                 </nav>
 
                 {/* Bottom controls */}
@@ -166,8 +198,13 @@ const AppLayout = ({ children }) => {
                             {user?.name?.[0]?.toUpperCase() || 'U'}
                         </div>
                         <div>
-                            <div style={{ fontSize: '0.875rem', fontWeight: 600 }}>{user?.name}</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'capitalize' }}>{user?.role}</div>
+                            <div style={{ fontSize: '0.875rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}>
+                                {user?.name}
+                                {user?.isAdmin && <Crown size={12} style={{ color: '#FFC600' }} />}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                {ROLE_LABEL[user?.role] || user?.role}
+                            </div>
                         </div>
                     </div>
                 </header>

@@ -16,9 +16,14 @@ const emergencyContactSchema = new mongoose.Schema(
         },
         phone: {
             type: String,
-            required: [true, 'Phone number is required'],
             trim: true,
-            match: [/^\+?[1-9]\d{1,14}$/, 'Please provide a valid phone number (E.164 format)'],
+            match: [/^\+?[1-9]\d{1,14}$/, 'Please provide a valid phone (E.164 format)'],
+        },
+        email: {
+            type: String,
+            trim: true,
+            lowercase: true,
+            match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Please provide a valid email'],
         },
         relationship: {
             type: String,

@@ -19,6 +19,7 @@ import NavigationPage from './pages/NavigationPage';
 import SettingsPage from './pages/SettingsPage';
 import EmergencyPage from './pages/EmergencyPage';
 import LogsPage from './pages/LogsPage';
+import AdminPage from './pages/AdminPage';
 
 const App = () => (
   <ThemeProvider>
@@ -55,6 +56,7 @@ const App = () => (
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/emergency" element={<ProtectedRoute><EmergencyPage /></ProtectedRoute>} />
           <Route path="/logs" element={<ProtectedRoute><LogsPage /></ProtectedRoute>} />
+          <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
 
           {/* Default redirect */}
           <Route path="/" element={<Navigate to="/dashboard" replace />} />

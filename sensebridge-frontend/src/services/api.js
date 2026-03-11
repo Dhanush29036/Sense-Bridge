@@ -72,6 +72,14 @@ export const emergencyService = {
     cancel: (eventId) => api.put(`/emergency/cancel/${eventId}`),
 };
 
+export const adminService = {
+    stats:        ()     => api.get('/admin/stats'),
+    users:        ()     => api.get('/admin/users'),
+    sosEvents:    ()     => api.get('/admin/sos-events'),
+    toggleActive: (id)   => api.patch(`/admin/users/${id}/toggle-active`),
+    toggleAdmin:  (id)   => api.patch(`/admin/users/${id}/toggle-admin`),
+};
+
 export const fusionService = {
     /** Run the multimodal fusion engine decision on all current signals */
     fuse: (payload) => api.post('/fuse', payload),

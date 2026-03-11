@@ -32,13 +32,33 @@ const getTwilioClient = () => {
 };
 
 
+// ── Email transport (lazy, reused) ─────────────────────────────────────────
+let _mailer = null;
+const getMailer = () => {
+    if (_mailer) return _mailer;
+    const { EMAIL_USER, EMAIL_PASS } = process.env;
+    if (!EMAIL_USER || !EMAIL_PASS ||
+        EMAIL_USER === 'your_gmail@gmail.com') return null;
+    try {
+        const nodemailer = require('nodemailer');
+        _mailer = nodemailer.createTransport({
+            service: 'gmail',
+            auth: { user: EMAIL_USER, pass: EMAIL_PASS },
+        });
+        return _mailer;
+    } catch {
+        console.warn('[Emergency] nodemailer not available');
+        return null;
+    }
+};
+
 // ─── POST /api/emergency/sos ─────────────────────────────────────────────────
 /**
  * Main SOS dispatch:
  *  1. Log the event to DB
  *  2. Fetch user's emergency contacts
- *  3. Send SMS with Google Maps link to each contact
- *  4. Return dispatch summary
+ *  3. Try SMS (Twilio) + email (nodemailer) for each contact
+ *  4. Return per-contact dispatch results
  *
  * Body: { userId, source, latitude?, longitude?, timestamp }
  */
@@ -48,7 +68,7 @@ router.post('/sos', auth, async (req, res) => {
 
         if (!userId) return res.status(400).json({ success: false, message: 'userId required' });
 
-        const user = await User.findById(userId).select('name role');
+        const user = await User.findById(userId).select('name role email');
         if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
         // 1. Log event
@@ -61,45 +81,95 @@ router.post('/sos', auth, async (req, res) => {
             status: 'dispatched',
         });
 
-        // 2. Build location link
+        // 2. Build location link + message text
         const mapsLink = (latitude && longitude)
             ? `https://maps.google.com/?q=${latitude},${longitude}`
-            : 'Location unavailable';
+            : null;
 
-        const message =
+        const timeStr = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+        const smsBody =
             `🚨 EMERGENCY ALERT from ${user.name || 'SenseBridge user'}\n` +
             `Source: ${source}\n` +
-            `Location: ${mapsLink}\n` +
-            `Time: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`;
+            `Location: ${mapsLink || 'unavailable'}\n` +
+            `Time: ${timeStr}`;
 
-        // 3. Fetch contacts and send SMS
+        const htmlBody = `
+            <div style="font-family:sans-serif;max-width:560px;margin:0 auto">
+              <div style="background:#ff4b6e;color:#fff;padding:20px 24px;border-radius:8px 8px 0 0">
+                <h2 style="margin:0">🚨 Emergency Alert — SenseBridge</h2>
+              </div>
+              <div style="padding:20px 24px;background:#fff;border:1px solid #eee;border-radius:0 0 8px 8px">
+                <p><strong>${user.name || 'A SenseBridge user'}</strong> has triggered an emergency SOS alert.</p>
+                <table style="width:100%;border-collapse:collapse">
+                  <tr><td style="padding:6px 0;color:#555;width:100px"><strong>Source</strong></td><td>${source}</td></tr>
+                  <tr><td style="padding:6px 0;color:#555"><strong>Time</strong></td><td>${timeStr}</td></tr>
+                  <tr><td style="padding:6px 0;color:#555"><strong>Location</strong></td>
+                      <td>${mapsLink ? `<a href="${mapsLink}" style="color:#6c63ff">${mapsLink}</a>` : 'Not available'}</td></tr>
+                </table>
+                ${mapsLink ? `<a href="${mapsLink}" style="display:inline-block;margin-top:16px;padding:10px 20px;background:#ff4b6e;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold">📍 Open on Google Maps</a>` : ''}
+                <hr style="margin:20px 0;border:none;border-top:1px solid #eee"/>
+                <p style="font-size:12px;color:#999">Sent automatically by SenseBridge Assistive System</p>
+              </div>
+            </div>`;
+
+        // 3. Send to each contact via all available channels
         const contacts = await EmergencyContact.find({ user: userId });
         const twilioClient = getTwilioClient();
+        const mailer       = getMailer();
         const results = [];
 
         for (const contact of contacts) {
-            let smsSent = false;
+            const result = { name: contact.name, phone: contact.phone, email: contact.email, smsSent: false, emailSent: false, error: null };
+
+            // ── Twilio SMS ──────────────────────────────────────────────
             if (twilioClient && contact.phone) {
                 try {
                     await twilioClient.messages.create({
-                        body: message,
+                        body: smsBody,
                         from: process.env.TWILIO_PHONE,
-                        to: contact.phone,
+                        to:   contact.phone,
                     });
-                    smsSent = true;
-                } catch (smsErr) {
-                    console.error(`[SMS] Failed for ${contact.phone}:`, smsErr.message);
+                    result.smsSent = true;
+                } catch (e) {
+                    console.error(`[SMS] ${contact.phone}:`, e.message);
+                    result.error = e.message;
                 }
             }
-            results.push({ name: contact.name, phone: contact.phone, smsSent });
+
+            // ── Email (nodemailer) ──────────────────────────────────────
+            if (mailer && contact.email) {
+                try {
+                    await mailer.sendMail({
+                        from:    process.env.EMAIL_FROM || process.env.EMAIL_USER,
+                        to:      contact.email,
+                        subject: `🚨 Emergency Alert from ${user.name || 'SenseBridge'}`,
+                        text:    smsBody,
+                        html:    htmlBody,
+                    });
+                    result.emailSent = true;
+                } catch (e) {
+                    console.error(`[Email] ${contact.email}:`, e.message);
+                    result.error = result.error ? result.error + '; ' + e.message : e.message;
+                }
+            }
+
+            results.push(result);
         }
+
+        const smsSentCount   = results.filter(r => r.smsSent).length;
+        const emailSentCount = results.filter(r => r.emailSent).length;
+        const totalNotified  = results.filter(r => r.smsSent || r.emailSent).length;
 
         res.json({
             success: true,
             eventId: log._id,
-            contactsNotified: results.filter(r => r.smsSent).length,
+            contactsNotified: totalNotified,
+            smsSentCount,
+            emailSentCount,
             contacts: results,
             mapsLink,
+            twilioConfigured: !!twilioClient,
+            emailConfigured:  !!mailer,
         });
 
     } catch (err) {

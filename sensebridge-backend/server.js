@@ -18,6 +18,8 @@ const emergencyContactRoutes = require('./routes/emergencyContactRoutes');
 const logRoutes = require('./routes/logRoutes');
 const emergencyRoutes = require('./routes/emergencyRoutes');
 const aiRoutes = require('./routes/aiRoutes');
+const adminRoutes = require('./routes/adminRoutes');
+const { register: metricsRegistry, metricsMiddleware } = require('./middleware/metrics');
 
 // ─── Database ──────────────────────────────────────────────────────────────────
 connectDB();
@@ -57,6 +59,9 @@ if (process.env.NODE_ENV !== 'test') {
     app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 }
 
+// ─── Prometheus metrics middleware (instrument every request) ─────────────────
+app.use(metricsMiddleware);
+
 // ─── Global rate limiter ───────────────────────────────────────────────────────
 app.use('/api', apiLimiter);
 
@@ -65,6 +70,17 @@ app.get('/health', (req, res) =>
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() })
 );
 
+// ─── Prometheus metrics endpoint (/metrics) ────────────────────────────────────
+// Prometheus scrapes this endpoint. Restrict access to localhost in prod.
+app.get('/metrics', async (req, res) => {
+    try {
+        res.set('Content-Type', metricsRegistry.contentType);
+        res.end(await metricsRegistry.metrics());
+    } catch (err) {
+        res.status(500).end(err.message);
+    }
+});
+
 // ─── API Routes ────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
 app.use('/api/preferences', preferenceRoutes);
@@ -72,6 +88,7 @@ app.use('/api/emergency-contacts', emergencyContactRoutes);
 app.use('/api/logs', logRoutes);
 app.use('/api/emergency', emergencyRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/admin', adminRoutes);
 
 // ─── 404 handler ──────────────────────────────────────────────────────────────
 app.use((req, res) => {

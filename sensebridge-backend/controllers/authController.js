@@ -19,6 +19,7 @@ const sendTokenResponse = (res, user, statusCode) => {
             name: user.name,
             email: user.email,
             role: user.role,
+            isAdmin: user.isAdmin,
         },
     });
 };
