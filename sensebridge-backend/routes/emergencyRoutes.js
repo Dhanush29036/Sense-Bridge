@@ -64,7 +64,7 @@ const getMailer = () => {
  */
 router.post('/sos', auth, async (req, res) => {
     try {
-        const { userId, source = 'button', latitude, longitude, timestamp } = req.body;
+        const { userId, source = 'button', latitude, longitude, timestamp, message } = req.body;
 
         if (!userId) return res.status(400).json({ success: false, message: 'userId required' });
 
@@ -96,17 +96,24 @@ router.post('/sos', auth, async (req, res) => {
         const htmlBody = `
             <div style="font-family:sans-serif;max-width:560px;margin:0 auto">
               <div style="background:#ff4b6e;color:#fff;padding:20px 24px;border-radius:8px 8px 0 0">
-                <h2 style="margin:0">🚨 Emergency Alert — SenseBridge</h2>
+                <h2 style="margin:0">&#x1F6A8; Emergency Alert &#x2014; SenseBridge</h2>
               </div>
               <div style="padding:20px 24px;background:#fff;border:1px solid #eee;border-radius:0 0 8px 8px">
                 <p><strong>${user.name || 'A SenseBridge user'}</strong> has triggered an emergency SOS alert.</p>
-                <table style="width:100%;border-collapse:collapse">
+
+                ${message ? `<div style="background:#fff5f5;border-left:4px solid #ff4b6e;padding:12px 16px;border-radius:4px;margin:12px 0;font-size:0.95rem;white-space:pre-wrap;color:#333">${message}</div>` : ''}
+
+                <table style="width:100%;border-collapse:collapse;margin-top:12px">
                   <tr><td style="padding:6px 0;color:#555;width:100px"><strong>Source</strong></td><td>${source}</td></tr>
                   <tr><td style="padding:6px 0;color:#555"><strong>Time</strong></td><td>${timeStr}</td></tr>
-                  <tr><td style="padding:6px 0;color:#555"><strong>Location</strong></td>
-                      <td>${mapsLink ? `<a href="${mapsLink}" style="color:#6c63ff">${mapsLink}</a>` : 'Not available'}</td></tr>
+                  <tr><td style="padding:6px 0;color:#555;vertical-align:top"><strong>Location</strong></td>
+                      <td>${mapsLink
+                            ? `<a href="${mapsLink}" style="color:#6c63ff;word-break:break-all">${mapsLink}</a>`
+                            : '<span style="color:#999">GPS not available &mdash; contact immediately</span>'}</td></tr>
                 </table>
-                ${mapsLink ? `<a href="${mapsLink}" style="display:inline-block;margin-top:16px;padding:10px 20px;background:#ff4b6e;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold">📍 Open on Google Maps</a>` : ''}
+
+                ${mapsLink ? `<a href="${mapsLink}" style="display:inline-block;margin-top:16px;padding:10px 22px;background:#ff4b6e;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;font-size:0.95rem">&#x1F4CD; Open on Google Maps</a>` : ''}
+
                 <hr style="margin:20px 0;border:none;border-top:1px solid #eee"/>
                 <p style="font-size:12px;color:#999">Sent automatically by SenseBridge Assistive System</p>
               </div>

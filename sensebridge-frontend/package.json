@@ -10,6 +10,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor/android": "^8.2.0",
+    "@capacitor/cli": "^8.2.0",
+    "@capacitor/core": "^8.2.0",
     "@mediapipe/hands": "^0.4.1675469240",
     "@tensorflow-models/coco-ssd": "^2.2.3",
     "@tensorflow-models/hand-pose-detection": "^2.0.1",
@@ -38,6 +41,7 @@
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
     "tailwindcss": "^4.2.1",
+    "typescript": "^6.0.2",
     "vite": "^7.3.1"
   }
 }

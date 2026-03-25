@@ -74,6 +74,18 @@ const GestureAssistPage = () => {
     const lastAddRef = useRef(0);
     const heldGesture = useRef({ gesture: null, start: 0, count: 0 });
     const activeRef = useRef(false);
+    
+    // ── Voice command support (vc:start / vc:stop events from VoiceCommandContext) ──
+    useEffect(() => {
+        const onStart = () => setActive(true);
+        const onStop  = () => setActive(false);
+        window.addEventListener('vc:start', onStart);
+        window.addEventListener('vc:stop',  onStop);
+        return () => {
+            window.removeEventListener('vc:start', onStart);
+            window.removeEventListener('vc:stop',  onStop);
+        };
+    }, []);
 
     // Get auth token for API calls
     const getToken = () => localStorage.getItem('token') || sessionStorage.getItem('token') || '';

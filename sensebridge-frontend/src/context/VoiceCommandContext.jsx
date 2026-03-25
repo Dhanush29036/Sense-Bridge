@@ -22,6 +22,36 @@ export const useVoiceCommands = () => useContext(VoiceCommandContext);
 // Each entry: { keywords, action, label, tts }
 // keywords: any phrase containing one of these strings triggers the command
 const COMMANDS = [
+    // ── Page actions (dispatched as CustomEvents) ────────────────────────
+    // These specific actions must come BEFORE generic navigation to prevent collisions
+    { keywords: ['start vision', 'start vision assist', 'begin vision', 'activate camera', 'turn on camera'],
+      action: 'event', event: 'vc:start',  path: '/vision',   label: 'Start Vision Assist',
+      tts: 'Starting Vision Assist camera' },
+    { keywords: ['stop vision', 'stop vision assist', 'deactivate camera', 'turn off camera'],
+      action: 'event', event: 'vc:stop',    label: 'Stop Vision Assist',
+      tts: 'Stopping camera' },
+    { keywords: ['start speech', 'start speech assist', 'begin listening', 'activate microphone'],
+      action: 'event', event: 'vc:start',  path: '/speech',   label: 'Start Speech Assist',
+      tts: 'Starting Speech Assist microphone' },
+    { keywords: ['stop speech', 'stop speech assist', 'deactivate microphone', 'stop recording'],
+      action: 'event', event: 'vc:stop',    label: 'Stop Speech Assist',
+      tts: 'Stopping microphone' },
+    { keywords: ['start gesture', 'start gesture assist', 'begin gesture'],
+      action: 'event', event: 'vc:start',  path: '/gesture',   label: 'Start Gesture Assist',
+      tts: 'Starting Gesture Assist detection' },
+    { keywords: ['stop gesture', 'stop gesture assist', 'deactivate gesture'],
+      action: 'event', event: 'vc:stop',    label: 'Stop Gesture Assist',
+      tts: 'Stopping gesture detection' },
+    { keywords: ['start navigation', 'begin navigation', 'start guidance'],
+      action: 'event', event: 'vc:start',  path: '/navigation',   label: 'Start Navigation',
+      tts: 'Starting navigation' },
+    { keywords: ['stop navigation', 'stop guidance', 'cancel navigation'],
+      action: 'event', event: 'vc:stop',    label: 'Stop Navigation',
+      tts: 'Stopping navigation' },
+    { keywords: ['send sos', 'trigger sos', 'emergency alert'],
+      action: 'event', event: 'vc:sos',     path: '/emergency', label: 'Send SOS',
+      tts: 'Triggering SOS alert' },
+
     // ── Navigation ──────────────────────────────────────────────────────
     { keywords: ['dashboard', 'home', 'go home', 'main page'],
       action: 'navigate', path: '/dashboard',   label: 'Dashboard',
@@ -48,22 +78,6 @@ const COMMANDS = [
       action: 'navigate', path: '/settings',    label: 'Settings',
       tts: 'Opening Settings' },
 
-    // ── Page actions (dispatched as CustomEvents) ────────────────────────
-    { keywords: ['start camera', 'start vision', 'begin vision', 'activate camera', 'turn on camera'],
-      action: 'event', event: 'vc:start',       label: 'Start Camera',
-      tts: 'Starting camera' },
-    { keywords: ['stop camera', 'stop vision', 'deactivate camera', 'turn off camera'],
-      action: 'event', event: 'vc:stop',        label: 'Stop Camera',
-      tts: 'Stopping camera' },
-    { keywords: ['start listening', 'begin listening', 'activate microphone', 'start speech'],
-      action: 'event', event: 'vc:start',       label: 'Start Listening',
-      tts: 'Starting microphone' },
-    { keywords: ['stop listening', 'deactivate microphone', 'stop speech', 'stop recording'],
-      action: 'event', event: 'vc:stop',        label: 'Stop Listening',
-      tts: 'Stopping microphone' },
-    { keywords: ['send sos', 'trigger sos', 'emergency alert'],
-      action: 'event', event: 'vc:sos',         label: 'Send SOS',
-      tts: 'Triggering SOS alert' },
     { keywords: ['scroll down', 'page down'],
       action: 'scroll', dir: 300,               label: 'Scroll Down',
       tts: '' },
@@ -132,12 +146,23 @@ export const VoiceCommandProvider = ({ children }) => {
         if (cmd.tts) tts(cmd.tts);
         showFeedback(`"${transcript}" → ${cmd.label}`);
 
+        let state = undefined;
+        if (cmd.path === '/navigation') {
+            const match = transcript.match(/(?:navigate to|directions to)\s+(.+)/i);
+            if (match && match[1]) {
+                state = { destinationQuery: match[1].trim(), autoNavigate: true };
+            }
+        }
+
+        if (cmd.path) {
+            navigate(cmd.path, { state });
+        }
+
         switch (cmd.action) {
-            case 'navigate':
-                navigate(cmd.path);
-                break;
             case 'event':
-                window.dispatchEvent(new CustomEvent(cmd.event, { detail: { source: 'voice' } }));
+                // Small delay to ensure navigation completes if path was changed
+                const dispatch = () => window.dispatchEvent(new CustomEvent(cmd.event, { detail: { source: 'voice' } }));
+                if (cmd.path) setTimeout(dispatch, 800); else dispatch();
                 break;
             case 'scroll':
                 window.scrollBy({ top: cmd.dir, behavior: 'smooth' });

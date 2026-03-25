@@ -4,9 +4,9 @@ const Preference = require('../models/Preference');
 // ─── @access Private
 const getPreferences = async (req, res, next) => {
     try {
-        const prefs = await Preference.findOne({ user: req.user._id });
+        let prefs = await Preference.findOne({ user: req.user._id });
         if (!prefs) {
-            return res.status(404).json({ success: false, message: 'Preferences not found.' });
+            prefs = await Preference.create({ user: req.user._id });
         }
         res.status(200).json({ success: true, data: prefs });
     } catch (err) {

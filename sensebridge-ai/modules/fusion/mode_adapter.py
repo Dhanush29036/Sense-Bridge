@@ -16,7 +16,7 @@ Rules:
 from __future__ import annotations
 from .schema import (
     FusionOutput, FusionInput, UserMode, AlertPriority,
-    OutputMode, ScoredSignal  # ScoredSignal imported from priority
+    OutputMode
 )
 from .priority import ScoredSignal   # re-export for clarity
 

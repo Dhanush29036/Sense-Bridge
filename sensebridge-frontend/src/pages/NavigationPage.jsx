@@ -10,6 +10,7 @@
  *  • Auto-advance navigation steps as user walks
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Polyline, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import AppLayout from '../layouts/AppLayout';
@@ -88,9 +89,26 @@ const NavigationPage = () => {
     const [error, setError]             = useState('');
     const [nearbyFeatures, setNearbyFeatures] = useState([]);
     const [lastSpokenStep, setLastSpokenStep] = useState(-1);
+    const [autoNavigateActive, setAutoNavigateActive] = useState(false);
+    const [pendingAutoStartPlace, setPendingAutoStartPlace] = useState(null);
+
+    const location = useLocation();
+    const routerNavigate = useNavigate();
 
     const watchIdRef  = useRef(null);
     const searchTimer = useRef(null);
+
+    // ── Voice command support (vc:start / vc:stop events from VoiceCommandContext) ──
+    useEffect(() => {
+        const onStart = () => { if (route) startNavigation(); };
+        const onStop  = () => stopNavigation();
+        window.addEventListener('vc:start', onStart);
+        window.addEventListener('vc:stop',  onStop);
+        return () => {
+            window.removeEventListener('vc:start', onStart);
+            window.removeEventListener('vc:stop',  onStop);
+        };
+    }, [route]); // re-bind if route changes so startNavigation uses fresh route
 
     // ── GPS tracking ──────────────────────────────────────────────────────
     const startGPS = useCallback(() => {
@@ -140,6 +158,16 @@ const NavigationPage = () => {
         };
     }, []);
 
+    // ── Pre-fill destination from voice command ────────────────────────────
+    useEffect(() => {
+        if (location.state?.destinationQuery) {
+            setSearchQuery(location.state.destinationQuery);
+            if (location.state.autoNavigate) setAutoNavigateActive(true);
+            // clear state so it doesn't loop
+            routerNavigate(location.pathname, { replace: true, state: {} });
+        }
+    }, [location.state, location.pathname, routerNavigate]);
+
     // ── Destination search with debounce ──────────────────────────────────
     useEffect(() => {
         clearTimeout(searchTimer.current);
@@ -148,9 +176,52 @@ const NavigationPage = () => {
             try {
                 const results = await searchPlace(searchQuery);
                 setSuggestions(results.slice(0, 5));
+                if (autoNavigateActive && results.length > 0) {
+                    setAutoNavigateActive(false);
+                    setPendingAutoStartPlace(results[0]);
+                }
             } catch { setSuggestions([]); }
         }, 400);
-    }, [searchQuery]);
+    }, [searchQuery, autoNavigateActive]);
+
+    // ── Process pending auto-start once GPS is available ──────────────────
+    useEffect(() => {
+        if (pendingAutoStartPlace && userPos && !loading) {
+            const runAutoStart = async () => {
+                const place = pendingAutoStartPlace;
+                setPendingAutoStartPlace(null);
+                
+                setSuggestions([]);
+                setSearchQuery(place.display_name.split(',')[0]);
+                const dest = { lat: parseFloat(place.lat), lon: parseFloat(place.lon), name: place.display_name.split(',').slice(0, 2).join(', ') };
+                setDestination(dest);
+                setError('');
+                setLoading('Calculating route…');
+
+                try {
+                    const r = await getWalkingRoute(userPos, [dest.lat, dest.lon]);
+                    setRoute(r);
+                    setCurrentStep(0);
+                    setLoading('');
+                    speak(`Route found. ${r.summary}. Let's go!`, { priority: 'high' });
+                    
+                    // Auto-trigger navigation
+                    setNavigating(true);
+                    setLastSpokenStep(-1);
+                    if (r.steps[0]) announceStep(r.steps[0].instruction, 0);
+                    // Slight delay to ensure state updates before rebinding GPS
+                    setTimeout(() => {
+                        if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+                        startGPS();
+                    }, 50);
+                } catch (e) {
+                    setError(e.message);
+                    setLoading('');
+                }
+            };
+            runAutoStart();
+        }
+    }, [pendingAutoStartPlace, userPos, loading, startGPS]);
 
     // ── Select a destination from suggestions ─────────────────────────────
     const selectDestination = useCallback(async (place) => {

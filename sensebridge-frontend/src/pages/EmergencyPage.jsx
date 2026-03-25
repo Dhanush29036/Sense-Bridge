@@ -65,7 +65,7 @@ const EmergencyPage = () => {
         navigator.geolocation?.getCurrentPosition(
             ({ coords }) => { coordsRef.current = { lat: coords.latitude, lng: coords.longitude }; },
             () => { coordsRef.current = null; },
-            { timeout: 4000, maximumAge: 0 }
+            { timeout: 5000, maximumAge: 60000, enableHighAccuracy: false }
         );
 
         let remaining = COUNTDOWN_S;
@@ -106,6 +106,7 @@ const EmergencyPage = () => {
                 latitude:  lat ?? null,
                 longitude: lng ?? null,
                 timestamp: Date.now() / 1000,
+                message:   sosText,
             });
             backendResult = data;
         } catch (err) {
