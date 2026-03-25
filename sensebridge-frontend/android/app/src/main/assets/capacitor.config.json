@@ -1,0 +1,13 @@
+{
+	"appId": "io.sensebridge.app",
+	"appName": "SenseBridge",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https"
+	},
+	"plugins": {
+		"Geolocation": {
+			"requestPermissions": true
+		}
+	}
+}
