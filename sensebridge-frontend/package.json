@@ -10,9 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@capacitor/android": "^8.2.0",
-    "@capacitor/cli": "^8.2.0",
-    "@capacitor/core": "^8.2.0",
+    "@capacitor/android": "^8.3.0",
+    "@capacitor/core": "^8.3.0",
     "@mediapipe/hands": "^0.4.1675469240",
     "@tensorflow-models/coco-ssd": "^2.2.3",
     "@tensorflow-models/hand-pose-detection": "^2.0.1",
@@ -31,6 +30,7 @@
     "react-router-dom": "^7.13.1"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.3.0",
     "@eslint/js": "^9.39.1",
     "@tailwindcss/vite": "^4.2.1",
     "@types/react": "^19.2.7",

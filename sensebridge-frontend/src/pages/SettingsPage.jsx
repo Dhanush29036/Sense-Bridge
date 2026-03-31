@@ -1,25 +1,24 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import AppLayout from '../layouts/AppLayout';
 import { preferenceService } from '../services/api';
 import { useTheme } from '../context/ThemeContext';
+import { useAuth } from '../context/AuthContext';
 import { toast } from 'react-hot-toast';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { Settings, Volume2, Bell, Globe, Type } from 'lucide-react';
-
-const ALERT_OPTIONS = ['sound', 'vibration', 'visual', 'all'];
-const LANGUAGE_OPTIONS = [
-    { value: 'en', label: 'English' }, { value: 'hi', label: 'हिंदी (Hindi)' },
-    { value: 'ta', label: 'தமிழ் (Tamil)' }, { value: 'te', label: 'తెలుగు (Telugu)' },
-    { value: 'bn', label: 'বাংলা (Bengali)' }, { value: 'mr', label: 'मराठी (Marathi)' },
-];
-const THEME_OPTIONS = ['light', 'dark', 'high-contrast'];
-const FONT_OPTIONS = [{ value: 1, label: 'Normal (100%)' }, { value: 1.2, label: 'Large (120%)' }, { value: 1.4, label: 'Extra Large (140%)' }];
+import {
+    ChevronLeft, Volume2, Bell, Globe, Monitor, Shield,
+    ChevronRight, LogOut,
+} from 'lucide-react';
 
 const SettingsPage = () => {
     const { theme, setTheme, fontScale, setFontScale } = useTheme();
+    const { logout } = useAuth();
+    const navigate = useNavigate();
     const [prefs, setPrefs] = useState(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [highContrast, setHighContrast] = useState(theme === 'high-contrast');
 
     useEffect(() => {
         preferenceService.get()
@@ -40,139 +39,256 @@ const SettingsPage = () => {
         }
     };
 
-    const updatePref = (key, val) => setPrefs((p) => ({ ...p, [key]: val }));
+    const updatePref = (key, val) => setPrefs(p => ({ ...p, [key]: val }));
 
-    if (loading) return <AppLayout><div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}><LoadingSpinner size={32} /></div></AppLayout>;
-    if (!prefs) return <AppLayout><div style={{ color: 'var(--color-danger)' }}>Could not load preferences.</div></AppLayout>;
+    const handleHighContrastToggle = () => {
+        const next = !highContrast;
+        setHighContrast(next);
+        setTheme(next ? 'high-contrast' : 'dark');
+    };
+
+    const handleLogout = () => {
+        logout();
+        navigate('/login');
+    };
+
+    if (loading) return (
+        <AppLayout>
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}>
+                <LoadingSpinner size={32} />
+            </div>
+        </AppLayout>
+    );
+
+    if (!prefs) return (
+        <AppLayout>
+            <div style={{ color: 'var(--color-danger)' }}>Could not load preferences.</div>
+        </AppLayout>
+    );
 
     return (
         <AppLayout>
-            <div style={{ maxWidth: 720 }}>
-                <h1 style={{ fontSize: '1.5rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 10, marginBottom: '1.75rem' }}>
-                    <Settings size={24} style={{ color: 'var(--color-primary)' }} /> Settings
-                </h1>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
+                <button className="icon-btn" onClick={() => navigate('/dashboard')}>
+                    <ChevronLeft size={20} />
+                </button>
+                <div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 800 }}>Settings</div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Accessibility &amp; Preferences</div>
+                </div>
+            </div>
 
-                {/* Section: Language & Voice */}
-                <section className="card" style={{ marginBottom: '1.25rem' }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.95rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <Globe size={16} style={{ color: 'var(--color-primary)' }} /> Language &amp; Voice
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
-                        <div className="form-group">
-                            <label className="form-label">Language</label>
-                            <select className="form-input" value={prefs.language} onChange={(e) => updatePref('language', e.target.value)}>
-                                {LANGUAGE_OPTIONS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
-                            </select>
+            {/* Voice Output */}
+            <div className="settings-section" style={{ marginBottom: '0.75rem' }}>
+                <div className="settings-section-label">
+                    <Volume2 size={12} style={{ color: 'var(--color-accent)' }} />
+                    VOICE OUTPUT
+                </div>
+                <div className="settings-row">
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: 8 }}>
+                            Voice Speed
                         </div>
-                        <div className="form-group">
-                            <label className="form-label">Voice Speed: {prefs.voiceSpeed}×</label>
-                            <input type="range" min={0.5} max={3} step={0.1}
-                                value={prefs.voiceSpeed}
-                                onChange={(e) => updatePref('voiceSpeed', parseFloat(e.target.value))}
-                                style={{ width: '100%', accentColor: 'var(--color-primary)' }}
-                            />
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                <span>0.5× Slow</span><span>3× Fast</span>
-                            </div>
+                        <input
+                            type="range" min={0.5} max={3} step={0.1}
+                            value={prefs.voiceSpeed}
+                            onChange={e => updatePref('voiceSpeed', parseFloat(e.target.value))}
+                            style={{ width: '100%', accentColor: 'var(--color-accent)', cursor: 'pointer' }}
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                            <span>0.5×</span>
+                            <span style={{ color: 'var(--color-accent)', fontWeight: 700 }}>{prefs.voiceSpeed}×</span>
+                            <span>3×</span>
                         </div>
                     </div>
-                </section>
+                </div>
+            </div>
 
-                {/* Section: Alerts */}
-                <section className="card" style={{ marginBottom: '1.25rem' }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.95rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <Bell size={16} style={{ color: 'var(--color-warning)' }} /> Alert Type
-                    </div>
-                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                        {ALERT_OPTIONS.map((opt) => (
-                            <button key={opt} onClick={() => updatePref('alertType', opt)}
-                                className="btn btn-ghost"
+            {/* Language */}
+            <div className="settings-section" style={{ marginBottom: '0.75rem' }}>
+                <div className="settings-section-label">
+                    <Globe size={12} style={{ color: 'var(--color-primary)' }} />
+                    LANGUAGE
+                </div>
+                <div className="settings-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '0.75rem' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Display &amp; Voice Language</div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                        {[
+                            { value: 'en', label: 'English' },
+                            { value: 'es', label: 'Spanish' },
+                            { value: 'hi', label: 'हिंदी' },
+                            { value: 'ta', label: 'தமிழ்' },
+                        ].map(({ value, label }) => (
+                            <button
+                                key={value}
+                                onClick={() => updatePref('language', value)}
                                 style={{
-                                    textTransform: 'capitalize',
-                                    borderColor: prefs.alertType === opt ? 'var(--color-primary)' : 'var(--border-color)',
-                                    background: prefs.alertType === opt ? 'rgba(108,99,255,0.1)' : 'transparent',
-                                    color: prefs.alertType === opt ? 'var(--color-primary)' : 'var(--text-secondary)',
-                                    fontWeight: prefs.alertType === opt ? 700 : 400,
-                                }}>
-                                {{ sound: '🔊', vibration: '📳', visual: '💡', all: '⚡ All' }[opt] || opt}
+                                    padding: '0.5rem 1rem',
+                                    borderRadius: 10,
+                                    border: '1.5px solid',
+                                    borderColor: prefs.language === value ? 'var(--color-primary)' : 'var(--border-card)',
+                                    background: prefs.language === value ? 'var(--color-primary)' : 'var(--bg-card2)',
+                                    color: prefs.language === value ? '#fff' : 'var(--text-secondary)',
+                                    fontWeight: prefs.language === value ? 700 : 500,
+                                    fontSize: '0.82rem',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.15s',
+                                }}
+                            >
+                                {label}
                             </button>
                         ))}
                     </div>
-                </section>
+                </div>
+            </div>
 
-                {/* Section: Appearance */}
-                <section className="card" style={{ marginBottom: '1.25rem' }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.95rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <Volume2 size={16} style={{ color: 'var(--color-accent)' }} /> Appearance
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
-                        <div className="form-group">
-                            <label className="form-label">Theme</label>
-                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                                {THEME_OPTIONS.map((t) => (
-                                    <button key={t} onClick={() => setTheme(t)}
-                                        className="btn btn-ghost"
-                                        style={{
-                                            textTransform: 'capitalize', fontSize: '0.8rem', padding: '0.5rem 0.85rem',
-                                            borderColor: theme === t ? 'var(--color-primary)' : 'var(--border-color)',
-                                            background: theme === t ? 'rgba(108,99,255,0.1)' : 'transparent',
-                                            color: theme === t ? 'var(--color-primary)' : 'var(--text-secondary)',
-                                        }}>
-                                        {{ light: '☀️', dark: '🌙', 'high-contrast': '⬛' }[t]} {t.replace('-', ' ')}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                        <div className="form-group">
-                            <label className="form-label"><Type size={13} style={{ marginRight: 4 }} />Font Size</label>
-                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                                {FONT_OPTIONS.map(({ value, label }) => (
-                                    <button key={value} onClick={() => setFontScale(value)}
-                                        className="btn btn-ghost"
-                                        style={{
-                                            fontSize: '0.75rem', padding: '0.45rem 0.75rem',
-                                            borderColor: fontScale === value ? 'var(--color-accent)' : 'var(--border-color)',
-                                            background: fontScale === value ? 'rgba(0,212,170,0.1)' : 'transparent',
-                                            color: fontScale === value ? 'var(--color-accent)' : 'var(--text-secondary)',
-                                        }}>
-                                        {label}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-                </section>
-
-                {/* AI Feature toggles */}
-                <section className="card" style={{ marginBottom: '1.25rem' }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.95rem', marginBottom: '1.25rem' }}>⚡ AI Features</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                        {Object.entries(prefs.features || {}).map(([key, val]) => (
-                            <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span style={{ textTransform: 'capitalize', fontWeight: 500 }}>
-                                    {{ objectDetection: '👁️ Object Detection (YOLO)', gestureRecognition: '🤲 Gesture Recognition', speechToText: '🎙️ Speech to Text (Whisper)', textToSpeech: '🔊 Text to Speech' }[key] || key}
-                                </span>
-                                <button onClick={() => setPrefs((p) => ({ ...p, features: { ...p.features, [key]: !val } }))}
+            {/* Alert Type */}
+            <div className="settings-section" style={{ marginBottom: '0.75rem' }}>
+                <div className="settings-section-label">
+                    <Bell size={12} style={{ color: 'var(--color-warning)' }} />
+                    ALERT TYPE
+                </div>
+                <div className="settings-row">
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 10 }}>How you receive notifications</div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            {['sound', 'vibration', 'visual', 'all'].map(opt => (
+                                <button
+                                    key={opt}
+                                    onClick={() => updatePref('alertType', opt)}
                                     style={{
-                                        width: 46, height: 26, borderRadius: 13, border: 'none', cursor: 'pointer',
-                                        background: val ? 'var(--color-primary)' : 'var(--border-color)',
-                                        position: 'relative', transition: 'background 0.2s',
-                                    }}>
-                                    <div style={{
-                                        width: 20, height: 20, borderRadius: '50%', background: '#fff',
-                                        position: 'absolute', top: 3, left: val ? 23 : 3,
-                                        transition: 'left 0.2s', boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
-                                    }} />
+                                        padding: '0.45rem 0.9rem',
+                                        borderRadius: 8,
+                                        border: '1.5px solid',
+                                        borderColor: prefs.alertType === opt ? 'var(--color-warning)' : 'var(--border-card)',
+                                        background: prefs.alertType === opt ? 'rgba(255,169,77,0.15)' : 'var(--bg-card2)',
+                                        color: prefs.alertType === opt ? 'var(--color-warning)' : 'var(--text-muted)',
+                                        fontWeight: prefs.alertType === opt ? 700 : 500,
+                                        fontSize: '0.78rem',
+                                        textTransform: 'capitalize',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s',
+                                    }}
+                                >
+                                    {{ sound: '🔊 Sound', vibration: '📳 Vibrate', visual: '💡 Visual', all: '⚡ All' }[opt]}
                                 </button>
-                            </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Display */}
+            <div className="settings-section" style={{ marginBottom: '0.75rem' }}>
+                <div className="settings-section-label">
+                    <Monitor size={12} style={{ color: 'var(--color-primary)' }} />
+                    DISPLAY
+                </div>
+
+                {/* High Contrast toggle */}
+                <div className="settings-row">
+                    <div>
+                        <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>High Contrast</div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 2 }}>Increase color contrast for visibility</div>
+                    </div>
+                    <button
+                        className="toggle"
+                        onClick={handleHighContrastToggle}
+                        style={{ background: highContrast ? 'var(--color-accent)' : 'var(--border-card)' }}
+                    >
+                        <div className="toggle-thumb" style={{ left: highContrast ? 23 : 3 }} />
+                    </button>
+                </div>
+
+                {/* Font size row */}
+                <div className="settings-row">
+                    <div>
+                        <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>Font Size</div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 2 }}>Adjust text size for readability</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                        {[{ v: 1, l: 'A' }, { v: 1.2, l: 'A+' }, { v: 1.4, l: 'A++' }].map(({ v, l }) => (
+                            <button
+                                key={v}
+                                onClick={() => setFontScale(v)}
+                                style={{
+                                    width: 34, height: 34, borderRadius: 8, border: '1.5px solid',
+                                    borderColor: fontScale === v ? 'var(--color-accent)' : 'var(--border-card)',
+                                    background: fontScale === v ? 'rgba(0,212,170,0.15)' : 'var(--bg-card2)',
+                                    color: fontScale === v ? 'var(--color-accent)' : 'var(--text-muted)',
+                                    fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer',
+                                }}
+                            >
+                                {l}
+                            </button>
                         ))}
                     </div>
-                </section>
-
-                <button className="btn btn-primary" onClick={handleSave} disabled={saving} style={{ width: '100%' }}>
-                    {saving ? <LoadingSpinner size={18} color="#fff" /> : '💾 Save Preferences'}
-                </button>
+                </div>
             </div>
+
+            {/* AI Feature toggles */}
+            {prefs.features && (
+                <div className="settings-section" style={{ marginBottom: '0.75rem' }}>
+                    <div className="settings-section-label">⚡ AI FEATURES</div>
+                    {Object.entries(prefs.features).map(([key, val]) => (
+                        <div key={key} className="settings-row">
+                            <span style={{ fontWeight: 500, fontSize: '0.88rem' }}>
+                                {{ objectDetection: '👁️ Object Detection', gestureRecognition: '🤲 Gesture Recognition', speechToText: '🎙️ Speech to Text', textToSpeech: '🔊 Text to Speech' }[key] || key}
+                            </span>
+                            <button
+                                className="toggle"
+                                onClick={() => setPrefs(p => ({ ...p, features: { ...p.features, [key]: !val } }))}
+                                style={{ background: val ? 'var(--color-primary)' : 'var(--border-card)' }}
+                            >
+                                <div className="toggle-thumb" style={{ left: val ? 23 : 3 }} />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Privacy & Data */}
+            <div className="settings-section" style={{ marginBottom: '1.25rem' }}>
+                <div className="settings-row" style={{ cursor: 'pointer' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{ width: 34, height: 34, borderRadius: 10, background: 'rgba(0,212,170,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <Shield size={16} style={{ color: 'var(--color-accent)' }} />
+                        </div>
+                        <div>
+                            <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>Privacy &amp; Data</div>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>All data processed on-device</div>
+                        </div>
+                    </div>
+                    <ChevronRight size={16} style={{ color: 'var(--text-muted)' }} />
+                </div>
+            </div>
+
+            {/* Save button */}
+            <button
+                className="btn btn-primary"
+                onClick={handleSave}
+                disabled={saving}
+                style={{ width: '100%', marginBottom: '0.75rem', borderRadius: 14 }}
+            >
+                {saving ? <LoadingSpinner size={18} color="#fff" /> : '💾 Save Preferences'}
+            </button>
+
+            {/* Sign out */}
+            <button
+                onClick={handleLogout}
+                style={{
+                    width: '100%', padding: '1rem', borderRadius: 14,
+                    background: 'linear-gradient(135deg, #8B000033, #c0392b33)',
+                    border: '1.5px solid #c0392b66',
+                    color: '#FF6B6B', fontWeight: 700, fontSize: '0.95rem',
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                    marginBottom: '0.5rem',
+                }}
+            >
+                <LogOut size={18} />
+                Sign Out
+            </button>
         </AppLayout>
     );
 };

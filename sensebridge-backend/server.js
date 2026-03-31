@@ -18,6 +18,7 @@ const emergencyContactRoutes = require('./routes/emergencyContactRoutes');
 const logRoutes = require('./routes/logRoutes');
 const emergencyRoutes = require('./routes/emergencyRoutes');
 const aiRoutes = require('./routes/aiRoutes');
+const fusionRoutes = require('./routes/fusionRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const { register: metricsRegistry, metricsMiddleware } = require('./middleware/metrics');
 
@@ -88,6 +89,7 @@ app.use('/api/emergency-contacts', emergencyContactRoutes);
 app.use('/api/logs', logRoutes);
 app.use('/api/emergency', emergencyRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/ai', fusionRoutes);
 app.use('/api/admin', adminRoutes);
 
 // ─── 404 handler ──────────────────────────────────────────────────────────────

@@ -1,140 +1,321 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useFusion } from '../context/MultimodalFusionContext';
 import AppLayout from '../layouts/AppLayout';
-import { Eye, Mic, Hand, Navigation, AlertTriangle, Activity, Zap, Crown } from 'lucide-react';
-
-// ── All available feature modes ───────────────────────────────────────────────
-const ALL_MODES = [
-    {
-        to: '/vision', icon: Eye, title: 'Vision Assist',
-        roles: ['blind', 'mixed'],
-        desc: 'Real-time object detection, face recognition, and audio navigation.',
-        gradient: 'linear-gradient(135deg, #6C63FF 0%, #9B59B6 100%)',
-        stats: 'YOLO Object Detection',
-    },
-    {
-        to: '/speech', icon: Mic, title: 'Speech Assist',
-        roles: ['deaf', 'mixed'],
-        desc: 'Live speech-to-text captions and visual sound indicators.',
-        gradient: 'linear-gradient(135deg, #00D4AA 0%, #0099CC 100%)',
-        stats: 'Whisper AI Transcription',
-    },
-    {
-        to: '/gesture', icon: Hand, title: 'Gesture Assist',
-        roles: ['mute', 'deaf', 'mixed'],
-        desc: 'Hand gesture recognition to enable touchless communication.',
-        gradient: 'linear-gradient(135deg, #FFA94D 0%, #FF6B6B 100%)',
-        stats: 'MediaPipe Gestures',
-    },
-    {
-        to: '/navigation', icon: Navigation, title: 'Navigation',
-        roles: ['blind', 'mixed'],
-        desc: 'Turn-by-turn audio navigation with obstacle detection.',
-        gradient: 'linear-gradient(135deg, #FF6B9D 0%, #C44FFF 100%)',
-        stats: 'OpenStreetMap + OSRM',
-    },
-];
-
-const ROLE_SUBTITLE = {
-    blind:  'Your Vision Assist & Navigation features are ready.',
-    deaf:   'Your Speech Assist & Gesture features are ready.',
-    mute:   'Your Gesture Assist features are ready.',
-    mixed:  'All assistive modes are available for you.',
-};
-
-const QUICK_LINKS = [
-    { to: '/emergency', icon: AlertTriangle, label: 'Emergency SOS', color: 'var(--color-danger)' },
-    { to: '/logs', icon: Activity, label: 'View Logs', color: 'var(--color-accent)' },
-    { to: '/settings', icon: Zap, label: 'Settings', color: 'var(--color-primary)' },
-];
+import {
+    Eye, MessageSquare, Hand, AlertTriangle,
+    Bell, Settings as SettingsIcon, ChevronRight,
+    Mic, Zap, Brain, RefreshCw, Volume2,
+} from 'lucide-react';
+import { speak, cancelSpeech } from '../services/aiService';
 
 const getGreeting = () => {
     const h = new Date().getHours();
-    if (h < 12) return 'Morning';
-    if (h < 17) return 'Afternoon';
-    return 'Evening';
+    if (h < 12) return 'morning';
+    if (h < 17) return 'afternoon';
+    return 'evening';
+};
+
+const FEATURES = [
+    {
+        to: '/vision',
+        icon: Eye,
+        title: 'Vision Assist',
+        desc: 'Object detection & navigation guidance',
+        badge: '● AI ACTIVE',
+        badgeColor: '#6C63FF',
+        gradient: 'linear-gradient(135deg, #1a1560 0%, #2d2080 50%, #1a157a 100%)',
+        iconBg: 'rgba(108,99,255,0.3)',
+        roles: ['blind', 'mixed'],
+        modalKey: 'vision',
+    },
+    {
+        to: '/speech',
+        icon: MessageSquare,
+        title: 'Speech Assist',
+        desc: 'Live captions & speech recognition',
+        badge: '● REAL-TIME',
+        badgeColor: '#00D4AA',
+        gradient: 'linear-gradient(135deg, #0a2e28 0%, #0d4035 50%, #0a3530 100%)',
+        iconBg: 'rgba(0,212,170,0.2)',
+        roles: ['deaf', 'mixed'],
+        modalKey: 'speech',
+    },
+    {
+        to: '/gesture',
+        icon: Hand,
+        title: 'Gesture Assist',
+        desc: 'Sign language & gesture recognition',
+        badge: '● HAND TRACKING',
+        badgeColor: '#8B5CF6',
+        gradient: 'linear-gradient(135deg, #200a40 0%, #2e1060 50%, #281058 100%)',
+        iconBg: 'rgba(139,92,246,0.25)',
+        roles: ['mute', 'deaf', 'mixed'],
+        modalKey: 'gesture',
+    },
+];
+
+const PRIORITY_STYLE = {
+    critical: { bg: 'rgba(255,75,110,0.12)', border: '#FF4B6E', dot: '#FF4B6E', label: 'CRITICAL' },
+    high:     { bg: 'rgba(255,169,77,0.12)',  border: '#FFA94D', dot: '#FFA94D', label: 'HIGH PRIORITY' },
+    normal:   { bg: 'rgba(108,99,255,0.10)',  border: '#6C63FF', dot: '#00D4AA', label: 'INSIGHT' },
+};
+
+const INTENT_ICON = {
+    emergency:  '🚨', hazard: '⚠️', warning: '🛑', needs: '🙏',
+    navigation: '🧭', social: '👋', general: '🧠',
 };
 
 const DashboardPage = () => {
     const { user } = useAuth();
     const navigate = useNavigate();
+    const { awareness, activeModals, fusionBusy, clearAwareness } = useFusion();
 
-    // Admins see all modes; others see only role-relevant ones
-    const visibleModes = user?.isAdmin
-        ? ALL_MODES
-        : ALL_MODES.filter(m => m.roles.includes(user?.role));
+    const visibleFeatures = user?.isAdmin
+        ? FEATURES
+        : FEATURES.filter(f => f.roles.includes(user?.role));
+
+    const priorityStyle = awareness ? (PRIORITY_STYLE[awareness.priority] || PRIORITY_STYLE.normal) : null;
+
+    const speakAwareness = () => {
+        if (!awareness?.text) return;
+        cancelSpeech();
+        speak(awareness.text, { priority: 'high' });
+    };
+
+    // Active modalities for the fusion status bar
+    const activeCount = Object.values(activeModals).filter(Boolean).length;
 
     return (
         <AppLayout>
-            {/* Header */}
-            <div style={{ marginBottom: '2rem' }}>
-                <h1 style={{ fontSize: '1.75rem', fontWeight: 800, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                    Good {getGreeting()}, {user?.name?.split(' ')[0]} 👋
-                    {user?.isAdmin && (
-                        <span style={{ fontSize: '0.9rem', background: 'rgba(255,198,0,0.15)', color: '#FFC600', padding: '3px 12px', borderRadius: 20, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                            <Crown size={13} /> Admin
-                        </span>
-                    )}
-                </h1>
-                <p style={{ color: 'var(--text-muted)' }}>
-                    {user?.isAdmin ? 'Admin view — all features visible.' : (ROLE_SUBTITLE[user?.role] || 'SenseBridge is ready.')}
-                </p>
+            {/* ── Status bar ─────────────────────────────────────────── */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.7rem', fontWeight: 700, color: 'var(--color-accent)', letterSpacing: '0.08em' }}>
+                    <span className="live-dot" />
+                    ALL SYSTEMS ACTIVE
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="icon-btn" onClick={() => navigate('/settings')} style={{ width: 36, height: 36 }}>
+                        <Bell size={17} />
+                    </button>
+                    <button className="icon-btn" onClick={() => navigate('/settings')} style={{ width: 36, height: 36 }}>
+                        <SettingsIcon size={17} />
+                    </button>
+                </div>
             </div>
 
-            {/* Mode Cards */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
-                {visibleModes.map(({ to, icon: Icon, title, desc, gradient, stats, roles }) => {
-                    const isRecommended = roles?.includes(user?.role);
+            {/* ── Greeting ───────────────────────────────────────────── */}
+            <h1 style={{ fontSize: '1.9rem', fontWeight: 800, marginBottom: '1rem', lineHeight: 1.2 }}>
+                Good {getGreeting()},<br />
+                <span style={{ color: 'var(--color-accent)' }}>{user?.name?.split(' ')[0] || 'Alex'}</span> 👋
+            </h1>
+
+            {/* ══════════════════════════════════════════════════════════
+                MULTIMODAL FUSION PANEL
+                Shows live correlated insights from all 3 AI modalities
+                ══════════════════════════════════════════════════════════ */}
+            <div style={{
+                background: 'linear-gradient(135deg, #0d0d2b 0%, #130c28 100%)',
+                border: `1.5px solid ${priorityStyle ? priorityStyle.border : 'rgba(108,99,255,0.3)'}`,
+                borderRadius: 18,
+                marginBottom: '1rem',
+                overflow: 'hidden',
+                transition: 'border-color 0.4s ease',
+            }}>
+                {/* Fusion header */}
+                <div style={{ padding: '0.65rem 0.9rem', borderBottom: '1px solid rgba(108,99,255,0.15)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Brain size={14} style={{ color: '#C4B5FD' }} />
+                    <span style={{ fontSize: '0.6rem', fontWeight: 700, color: '#C4B5FD', letterSpacing: '0.1em' }}>
+                        MULTIMODAL AI FUSION
+                    </span>
+                    {fusionBusy && (
+                        <RefreshCw size={11} style={{ color: '#C4B5FD', marginLeft: 4, animation: 'spin 1s linear infinite' }} />
+                    )}
+
+                    {/* Active modal indicators */}
+                    <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5 }}>
+                        {FEATURES.map(f => {
+                            const isActive = activeModals[f.modalKey];
+                            return (
+                                <div
+                                    key={f.modalKey}
+                                    title={f.title}
+                                    style={{
+                                        width: 22, height: 22, borderRadius: 7,
+                                        background: isActive ? `${f.badgeColor}22` : 'rgba(255,255,255,0.04)',
+                                        border: `1.5px solid ${isActive ? f.badgeColor : 'rgba(255,255,255,0.08)'}`,
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        transition: 'all 0.3s',
+                                    }}
+                                >
+                                    <f.icon size={11} color={isActive ? f.badgeColor : 'rgba(255,255,255,0.2)'} />
+                                </div>
+                            );
+                        })}
+                        {activeCount >= 2 && (
+                            <span style={{ fontSize: '0.55rem', color: '#00D4AA', fontWeight: 700, marginLeft: 2 }}>
+                                {activeCount}× FUSED
+                            </span>
+                        )}
+                    </div>
+                </div>
+
+                {/* Fusion content */}
+                <div style={{ padding: '0.75rem 0.9rem' }}>
+                    {awareness ? (
+                        <>
+                            {/* Priority badge */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                                <span style={{ fontSize: '1rem' }}>{INTENT_ICON[awareness.intent] || '🧠'}</span>
+                                <span style={{
+                                    fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.1em',
+                                    color: priorityStyle.dot, background: priorityStyle.bg,
+                                    padding: '2px 8px', borderRadius: 6,
+                                }}>
+                                    {priorityStyle.label}
+                                </span>
+                                <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                                    {awareness.fused_at}
+                                </span>
+                            </div>
+
+                            {/* Main awareness text */}
+                            <p style={{
+                                fontSize: '0.92rem', fontWeight: 600,
+                                color: '#E8E0FF', lineHeight: 1.5,
+                                margin: '0 0 0.6rem 0',
+                            }}>
+                                {awareness.text}
+                            </p>
+
+                            {/* Suggestions */}
+                            {awareness.suggestions?.length > 0 && (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 8 }}>
+                                    {awareness.suggestions.map((s, i) => (
+                                        <span key={i} style={{
+                                            fontSize: '0.62rem', padding: '3px 10px', borderRadius: 20,
+                                            background: 'rgba(0,212,170,0.1)',
+                                            border: '1px solid rgba(0,212,170,0.25)',
+                                            color: '#00D4AA', fontWeight: 600,
+                                        }}>
+                                            → {s}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Source chips + actions */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                {Object.entries(awareness.sources || {}).map(([mod, active]) =>
+                                    active ? (
+                                        <span key={mod} style={{
+                                            fontSize: '0.58rem', padding: '1px 7px', borderRadius: 10,
+                                            background: 'rgba(255,255,255,0.06)',
+                                            color: 'var(--text-muted)', fontWeight: 600,
+                                        }}>
+                                            {mod}
+                                        </span>
+                                    ) : null
+                                )}
+                                <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                                    <button onClick={speakAwareness} style={{ background: 'rgba(108,99,255,0.2)', border: 'none', borderRadius: 8, padding: '4px 8px', cursor: 'pointer' }}>
+                                        <Volume2 size={13} style={{ color: '#C4B5FD' }} />
+                                    </button>
+                                    <button onClick={clearAwareness} style={{ background: 'rgba(255,255,255,0.06)', border: 'none', borderRadius: 8, padding: '4px 8px', cursor: 'pointer', fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                                        ✕
+                                    </button>
+                                </div>
+                            </div>
+                        </>
+                    ) : (
+                        /* Empty state */
+                        <div style={{ textAlign: 'center', padding: '0.75rem 0', color: 'var(--text-muted)' }}>
+                            <Zap size={20} style={{ color: 'rgba(108,99,255,0.3)', marginBottom: 6 }} />
+                            <div style={{ fontSize: '0.78rem', fontWeight: 600, marginBottom: 3 }}>
+                                Fusion Standby
+                            </div>
+                            <div style={{ fontSize: '0.68rem', lineHeight: 1.4 }}>
+                                Run any 2+ AI modes together.<br />
+                                Insights will appear here automatically.
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* Fusion progress dots (animated when busy) */}
+                {fusionBusy && (
+                    <div style={{ height: 2, background: 'linear-gradient(90deg, transparent, #6C63FF, #8B5CF6, transparent)', animation: 'shimmer 1.5s infinite' }} />
+                )}
+            </div>
+
+            {/* ── Voice navigation bar ───────────────────────────────── */}
+            <div style={{
+                background: 'var(--bg-card)',
+                border: '1.5px solid var(--color-accent)',
+                borderRadius: 14,
+                padding: '0.75rem 1rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: '1.25rem',
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ width: 34, height: 34, borderRadius: 10, background: 'rgba(0,212,170,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <Mic size={18} style={{ color: 'var(--color-accent)' }} />
+                    </div>
+                    <div>
+                        <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--color-accent)' }}>Voice Navigation Active</div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Say "Open Vision" or "Start Caption"</div>
+                    </div>
+                </div>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>◁▷</div>
+            </div>
+
+            {/* ── Feature cards ──────────────────────────────────────── */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem', marginBottom: '1rem' }}>
+                {visibleFeatures.map(({ to, icon: Icon, title, desc, badge, badgeColor, gradient, iconBg, modalKey }) => {
+                    const isLive = activeModals[modalKey];
                     return (
-                        <button key={to}
+                        <button
+                            key={to}
+                            className="feature-card"
                             onClick={() => navigate(to)}
                             style={{
-                                background: 'var(--bg-card)', border: '1px solid var(--border-color)',
-                                borderRadius: 20, padding: '1.5rem', cursor: 'pointer', textAlign: 'left',
-                                transition: 'all 0.2s ease', display: 'flex', flexDirection: 'column', gap: '1rem',
-                                position: 'relative', overflow: 'hidden',
+                                background: gradient,
+                                boxShadow: isLive ? `0 0 0 1.5px ${badgeColor}55` : 'none',
+                                transition: 'box-shadow 0.3s',
                             }}
-                            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.boxShadow = '0 12px 40px rgba(0,0,0,0.2)'; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = ''; }}
                         >
-                            {/* Gradient strip */}
-                            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 4, background: gradient, borderRadius: '20px 20px 0 0' }} />
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                <div style={{ width: 52, height: 52, borderRadius: 14, background: gradient, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
-                                    <Icon size={24} />
-                                </div>
-                                {isRecommended && (
-                                    <span className="badge badge-info" style={{ fontSize: '0.65rem' }}>Recommended</span>
-                                )}
+                            <div className="feature-card-icon" style={{ background: iconBg }}>
+                                <Icon size={26} color="#fff" strokeWidth={1.75} />
                             </div>
-                            <div>
-                                <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: 6 }}>{title}</div>
-                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', lineHeight: 1.5 }}>{desc}</div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontWeight: 700, fontSize: '1rem', marginBottom: 3 }}>{title}</div>
+                                <div style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.7)', marginBottom: 6, lineHeight: 1.35 }}>{desc}</div>
+                                <span style={{
+                                    fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.07em',
+                                    color: badgeColor, background: `${badgeColor}22`,
+                                    padding: '2px 8px', borderRadius: 6,
+                                }}>
+                                    {isLive ? '● FEEDING FUSION' : badge}
+                                </span>
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-                                <Activity size={12} /> {stats}
-                            </div>
+                            <ChevronRight size={18} style={{ color: 'rgba(255,255,255,0.4)', flexShrink: 0 }} />
                         </button>
                     );
                 })}
             </div>
 
-            {/* Quick links */}
-            <div style={{ marginBottom: '0.75rem', fontWeight: 600, fontSize: '0.875rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Quick Actions
-            </div>
-            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                {QUICK_LINKS.map(({ to, icon: Icon, label, color }) => (
-                    <button key={to} onClick={() => navigate(to)} className="btn btn-ghost" style={{ gap: '0.5rem', color }}>
-                        <Icon size={16} /> {label}
-                    </button>
-                ))}
-                {user?.isAdmin && (
-                    <button onClick={() => navigate('/admin')} className="btn btn-ghost" style={{ gap: '0.5rem', color: '#FFC600' }}>
-                        <Crown size={16} /> Admin Panel
-                    </button>
-                )}
-            </div>
+            {/* ── Emergency SOS ──────────────────────────────────────── */}
+            <button
+                className="emergency-card"
+                onClick={() => navigate('/emergency')}
+                style={{ marginBottom: '0.5rem' }}
+            >
+                <AlertTriangle size={22} style={{ flexShrink: 0 }} />
+                <span style={{ flex: 1 }}>Emergency SOS</span>
+                <span style={{ letterSpacing: 2, opacity: 0.5, fontSize: '0.9rem' }}>···</span>
+            </button>
         </AppLayout>
     );
 };

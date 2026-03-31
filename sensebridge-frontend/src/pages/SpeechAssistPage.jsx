@@ -1,222 +1,365 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import AppLayout from '../layouts/AppLayout';
-import { startSpeechRecognition } from '../services/aiService';
-import { Mic, MicOff, Volume2, Play, Square, Globe } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { ChevronLeft, Copy, Trash2, Mic, RefreshCw, Languages } from 'lucide-react';
+
+const BAR_COUNT = 28;
+const MAX_CHUNK_MS = 8000;  // Force chunk if speaking for 8s
+const SILENCE_MS   = 1200;  // Pause duration to trigger translation
 
 const LANGUAGES = [
-    { code: 'en-US', label: '🇺🇸 English (US)' },
-    { code: 'en-IN', label: '🇮🇳 English (India)' },
-    { code: 'hi-IN', label: '🇮🇳 हिंदी (Hindi)' },
-    { code: 'ta-IN', label: '🇮🇳 தமிழ் (Tamil)' },
-    { code: 'te-IN', label: '🇮🇳 తెలుగు (Telugu)' },
-    { code: 'bn-IN', label: '🇮🇳 বাংলা (Bengali)' },
-    { code: 'mr-IN', label: '🇮🇳 मराठी (Marathi)' },
-    { code: 'es-ES', label: '🇪🇸 Español (Spanish)' },
-    { code: 'fr-FR', label: '🇫🇷 Français (French)' },
-    { code: 'de-DE', label: '🇩🇪 Deutsch (German)' },
-    { code: 'ar-SA', label: '🇸🇦 العربية (Arabic)' },
-    { code: 'ja-JP', label: '🇯🇵 日本語 (Japanese)' },
-    { code: 'zh-CN', label: '🇨🇳 中文 (Chinese)' },
+    'English', 'Spanish', 'French', 'German', 'Hindi', 'Japanese', 'Arabic', 'Portuguese'
 ];
 
-const BAR_COUNT = 24;
-
 const SpeechAssistPage = () => {
+    const navigate = useNavigate();
+    const { token } = useAuth();
+
     const [active, setActive] = useState(false);
-    const [captions, setCaptions] = useState([]);   // committed final captions
-    const [interimText, setInterimText] = useState('');  // live word-by-word preview
-    const [barHeights, setBarHeights] = useState(Array(BAR_COUNT).fill(15));
-    const [language, setLanguage] = useState('en-US');
+    const [captions, setCaptions] = useState([]);
+    const [barHeights, setBarHeights] = useState(Array(BAR_COUNT).fill(8));
+    const [targetLang, setTargetLang] = useState('English');
+    const [processing, setProcessing] = useState(false);
+    const [atBottom, setAtBottom] = useState(true);
+
+    const listRef = useRef(null);
     const captionEndRef = useRef(null);
     const audioCtxRef = useRef(null);
     const analyserRef = useRef(null);
     const rafRef = useRef(null);
     const streamRef = useRef(null);
+    
+    // VAD & Recording refs
+    const mediaRecRef     = useRef(null);
+    const isSpeakingRef   = useRef(false);
+    const silenceStartRef = useRef(0);
+    const chunkStartRef   = useRef(0);
 
-    // ── Voice command support (vc:start / vc:stop events from VoiceCommandContext) ──
+    // ── Emit multimodal events ───────────────────────────────────────────
     useEffect(() => {
         const onStart = () => setActive(true);
         const onStop  = () => setActive(false);
         window.addEventListener('vc:start', onStart);
         window.addEventListener('vc:stop',  onStop);
-        return () => {
-            window.removeEventListener('vc:start', onStart);
-            window.removeEventListener('vc:stop',  onStop);
-        };
+        return () => { window.removeEventListener('vc:start', onStart); window.removeEventListener('vc:stop', onStop); };
     }, []);
 
-    // ── Web Audio visualizer ────────────────────────────────────────────────
-    const startVisualizer = useCallback(async () => {
+    // ── Backend Chunk Processor ──────────────────────────────────────────
+    const processChunk = async (blob) => {
+        if (blob.size < 4000) return; // Ignore tiny empty blobs
+        
+        const reader = new FileReader();
+        reader.readAsDataURL(blob);
+        reader.onloadend = async () => {
+            const base64Audio = reader.result.split(',')[1];
+            setProcessing(true);
+            try {
+                const res = await fetch('/api/ai/transcribe-translate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                    body: JSON.stringify({ audioBase64: base64Audio, targetLang })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.translated && data.text) {
+                        setCaptions(prev => [...prev, {
+                            id: Date.now(),
+                            time: new Date().toLocaleTimeString(),
+                            text: data.translated,
+                            nativeText: data.text,
+                            lang: data.sourceLang,
+                            isMe: false, // Defaulting to incoming speech
+                        }]);
+                        
+                        // Fire multimodal fusion event
+                        window.dispatchEvent(new CustomEvent('sb:speech', { 
+                            detail: { text: data.translated, isFinal: true, lang: data.sourceLang } 
+                        }));
+                    }
+                }
+            } catch (err) {
+                console.error('[Speech] Translation error:', err);
+            } finally {
+                setProcessing(false);
+            }
+        };
+    };
+
+    // ── Mic & VAD Setup ──────────────────────────────────────────────────
+    const startVisualizerAndVAD = useCallback(async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
             streamRef.current = stream;
-
-            audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            
+            // Audio visualizer setup
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtxRef.current = new AudioContext();
             analyserRef.current = audioCtxRef.current.createAnalyser();
-            analyserRef.current.fftSize = 128;          // 64 frequency bands
-            analyserRef.current.smoothingTimeConstant = 0.75;
-
+            analyserRef.current.fftSize = 256;
+            analyserRef.current.smoothingTimeConstant = 0.8;
+            
             const source = audioCtxRef.current.createMediaStreamSource(stream);
             source.connect(analyserRef.current);
-
             const freqData = new Uint8Array(analyserRef.current.frequencyBinCount);
+
+            // MediaRecorder setup
+            const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            mediaRecRef.current = mr;
+            chunkStartRef.current = Date.now();
+
+            mr.ondataavailable = (e) => {
+                if (e.data.size > 0) processChunk(e.data);
+            };
+            mr.start();
 
             const draw = () => {
                 rafRef.current = requestAnimationFrame(draw);
                 analyserRef.current.getByteFrequencyData(freqData);
-                // Pick BAR_COUNT evenly-spaced bands from the low-mid freq range
+                
+                // UI Bars
                 const step = Math.floor(freqData.length / BAR_COUNT);
                 const heights = Array.from({ length: BAR_COUNT }, (_, i) => {
-                    const val = freqData[i * step]; // 0-255
-                    return Math.max(8, (val / 255) * 100); // scale to % height, min 8
+                    const val = freqData[i * step];
+                    return Math.max(4, (val / 255) * 36);
                 });
                 setBarHeights(heights);
+
+                // Voice Activity Detection (VAD)
+                const sum = freqData.reduce((a, b) => a + b, 0);
+                const avgVolume = sum / freqData.length;
+                const now = Date.now();
+
+                const VOL_THRESHOLD = 15; // Tuned for voice vs background
+
+                if (avgVolume > VOL_THRESHOLD) {
+                    isSpeakingRef.current = true;
+                    silenceStartRef.current = 0;
+                } else if (isSpeakingRef.current) {
+                    if (!silenceStartRef.current) silenceStartRef.current = now;
+                    // Trigger chunk on 1.2s silence
+                    if (now - silenceStartRef.current > SILENCE_MS) {
+                        isSpeakingRef.current = false;
+                        silenceStartRef.current = 0;
+                        if (mr.state === 'recording') {
+                            mr.stop();
+                            mr.start(); // immediately restart
+                            chunkStartRef.current = now;
+                        }
+                    }
+                }
+
+                // Force chunk if speaking continuously for 8 seconds
+                if (isSpeakingRef.current && (now - chunkStartRef.current > MAX_CHUNK_MS)) {
+                    if (mr.state === 'recording') {
+                        mr.stop();
+                        mr.start();
+                        chunkStartRef.current = now;
+                        silenceStartRef.current = 0;
+                    }
+                }
             };
             draw();
-        } catch (err) {
-            console.error('[Audio] Mic access denied for visualizer:', err);
+        } catch (err) { 
+            console.error('[Audio] Mic denied or failed:', err); 
+            setActive(false);
         }
-    }, []);
+    }, [targetLang, token]); // Rebind if targetLang changes, but we try to keep it steady
 
-    const stopVisualizer = useCallback(() => {
+    const stopAll = useCallback(() => {
         if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        if (mediaRecRef.current && mediaRecRef.current.state === 'recording') {
+            mediaRecRef.current.stop();
+        }
         if (audioCtxRef.current) { audioCtxRef.current.close(); audioCtxRef.current = null; }
         if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
-        setBarHeights(Array(BAR_COUNT).fill(15));
+        
+        setBarHeights(Array(BAR_COUNT).fill(4));
+        isSpeakingRef.current = false;
+        silenceStartRef.current = 0;
+        mediaRecRef.current = null;
     }, []);
 
-    // ── Speech recognition + visualizer lifecycle ───────────────────────────
     useEffect(() => {
-        if (!active) return;
-        startVisualizer();
-        setInterimText('');
-        const stop = startSpeechRecognition((result) => {
-            if (result.isFinal) {
-                // Committed sentence — add to captions list, clear interim
-                setInterimText('');
-                setCaptions((prev) => [
-                    ...prev,
-                    { id: Date.now(), text: result.text, confidence: result.confidence, time: new Date().toLocaleTimeString() }
-                ].slice(-30));
-            } else {
-                // Interim — update live preview immediately (fires on every word)
-                setInterimText(result.text);
-            }
-        }, language);
-        return () => { stop(); stopVisualizer(); setInterimText(''); };
-    }, [active, language, startVisualizer, stopVisualizer]);
+        if (active) startVisualizerAndVAD();
+        else stopAll();
+        return stopAll;
+    }, [active, startVisualizerAndVAD, stopAll]);
 
-    // Auto-scroll captions
-    useEffect(() => { captionEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [captions]);
+    // ── Auto-scroll ──────────────────────────────────────────────────────
+    useEffect(() => {
+        if (atBottom) captionEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [captions, atBottom, processing]);
 
-    // Derive glow intensity from average bar height
-    const avgLevel = barHeights.reduce((s, h) => s + h, 0) / barHeights.length;
+    const handleScroll = () => {
+        const el = listRef.current;
+        if (!el) return;
+        setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
+    };
+
+    const handleCopy = () => {
+        const text = captions.map(c => c.text).join('\n');
+        navigator.clipboard?.writeText(text).catch(() => {});
+    };
 
     return (
-        <AppLayout>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                {/* Header */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div>
-                        <h1 style={{ fontSize: '1.5rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <Mic size={24} style={{ color: 'var(--color-accent)' }} /> Speech Assist
-                        </h1>
-                        <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Live captions powered by browser Speech API</p>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <Globe size={15} style={{ color: 'var(--text-muted)' }} />
-                            <select
-                                value={language}
-                                onChange={e => { setLanguage(e.target.value); if (active) { setActive(false); setTimeout(() => setActive(true), 150); } }}
-                                className="form-input"
-                                style={{ padding: '0.4rem 0.6rem', fontSize: '0.8rem', minWidth: 160 }}
-                            >
-                                {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
-                            </select>
-                        </div>
-                        <button onClick={() => setActive(!active)} className={`btn ${active ? 'btn-danger' : 'btn-primary'}`}>
-                            {active ? <><Square size={16} /> Stop</> : <><Play size={16} /> Start</>}
-                        </button>
+        <AppLayout noPad>
+            {/* ── Header ─────────────────────────────────────────────── */}
+            <div className="page-header" style={{ padding: '0.65rem 1rem' }}>
+                <button className="icon-btn" onClick={() => navigate('/dashboard')}>
+                    <ChevronLeft size={20} />
+                </button>
+                <div style={{ flex: 1, textAlign: 'center' }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>Speech Assist</div>
+                    <div style={{ fontSize: '0.62rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 1 }}>
+                        {active ? (
+                            <>
+                                <span className="live-dot" style={{ width: 6, height: 6 }} />
+                                <span style={{ color: 'var(--color-accent)' }}>Live Translation</span>
+                            </>
+                        ) : (
+                            <span style={{ color: 'var(--text-muted)' }}>Tap mic to start</span>
+                        )}
                     </div>
                 </div>
-
-                {/* Mic indicator */}
-                <div className="card" style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', padding: '1rem 1.5rem' }}>
-                    <div style={{
-                        width: 56, height: 56, borderRadius: '50%',
-                        background: active ? 'rgba(0,212,170,0.15)' : 'var(--bg-base)',
-                        border: `3px solid ${active ? 'var(--color-accent)' : 'var(--border-color)'}`,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        transition: 'all 0.3s',
-                        boxShadow: active ? `0 0 ${avgLevel / 2}px rgba(0,212,170,0.5)` : 'none',
-                    }}>
-                        {active ? <Mic size={22} style={{ color: 'var(--color-accent)' }} /> : <MicOff size={22} style={{ color: 'var(--text-muted)' }} />}
-                    </div>
-                    <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600, marginBottom: 6 }}>{active ? 'Listening...' : 'Microphone Off'}</div>
-                        {/* Real frequency bars */}
-                        <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 28 }}>
-                            {barHeights.map((h, i) => (
-                                <div key={i} style={{
-                                    width: 4, borderRadius: 2,
-                                    background: `hsl(${163 + i * 1.5}, 80%, ${active ? 55 : 30}%)`,
-                                    height: `${h}%`,
-                                    opacity: active ? 0.9 : 0.2,
-                                    transition: 'height 0.06s ease',
-                                }} />
-                            ))}
-                        </div>
-                    </div>
-                    {active && <span className="badge badge-success">LIVE</span>}
+                <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="icon-btn" onClick={handleCopy} title="Copy all captions">
+                        <Copy size={16} />
+                    </button>
+                    <button className="icon-btn" onClick={() => setCaptions([])} title="Clear">
+                        <Trash2 size={16} />
+                    </button>
                 </div>
+            </div>
 
-                {/* Caption display */}
-                <div className="card" style={{ minHeight: 300, maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ fontWeight: 600, fontSize: '0.875rem', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <Volume2 size={16} /> Live Captions
-                        {active && <span style={{ marginLeft: 'auto', fontSize: '0.72rem', color: 'var(--text-muted)' }}>Interim words shown instantly</span>}
+            {/* ── Target Language Select ──────────────────────────────── */}
+            <div style={{ 
+                padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: 10,
+                background: 'var(--bg-card)', borderBottom: '1px solid rgba(108,99,255,0.15)'
+            }}>
+                <Languages size={16} style={{ color: 'var(--color-accent)' }} />
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>Target:</span>
+                <select 
+                    value={targetLang}
+                    onChange={(e) => setTargetLang(e.target.value)}
+                    style={{
+                        background: 'rgba(255,255,255,0.05)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        color: '#fff', padding: '4px 8px', borderRadius: 8,
+                        fontSize: '0.75rem', fontWeight: 600, outline: 'none'
+                    }}
+                >
+                    {LANGUAGES.map(l => <option key={l} value={l} style={{ color: '#000' }}>{l}</option>)}
+                </select>
+                <div style={{ marginLeft: 'auto', fontSize: '0.65rem', color: '#00D4AA', background: 'rgba(0,212,170,0.1)', padding: '2px 6px', borderRadius: 6, fontWeight: 700 }}>
+                    AUTO-DETECT MIXED
+                </div>
+            </div>
+
+            {/* ── Caption list ───────────────────────────────────────── */}
+            <div
+                ref={listRef}
+                onScroll={handleScroll}
+                style={{
+                    flex: 1, overflowY: 'auto', padding: '0.75rem 1rem',
+                    display: 'flex', flexDirection: 'column', gap: '0.65rem',
+                }}
+            >
+                {captions.length === 0 && !processing && (
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
+                        <div style={{ fontSize: '0.875rem', fontWeight: 600, marginBottom: 4 }}>
+                            {active ? 'Listening for speech…' : 'Start listening to translate'}
+                        </div>
+                        <div style={{ fontSize: '0.65rem', maxWidth: '70%', textAlign: 'center', lineHeight: 1.4 }}>
+                            Speak naturally in any language. The AI will chunk your sentences and translate them to {targetLang}.
+                        </div>
                     </div>
+                )}
 
-                    {/* ── Live interim preview (updates word-by-word) ─────────── */}
-                    {active && (
-                        <div style={{
-                            padding: '10px 14px', borderRadius: 10, marginBottom: 8,
-                            background: 'rgba(0,212,170,0.06)',
-                            border: `1px solid ${interimText ? 'rgba(0,212,170,0.4)' : 'rgba(0,212,170,0.1)'}`,
-                            minHeight: 44, display: 'flex', alignItems: 'center',
-                            transition: 'border-color 0.1s',
-                        }}>
-                            {interimText ? (
-                                <span style={{ fontSize: '1.05rem', color: 'rgba(255,255,255,0.6)', fontStyle: 'italic', letterSpacing: '0.01em' }}>
-                                    {interimText}
-                                    <span style={{ display: 'inline-block', width: 2, height: '1em', background: 'var(--color-accent)', marginLeft: 3, verticalAlign: 'text-bottom', animation: 'blink 1s step-end infinite' }} />
-                                </span>
-                            ) : (
-                                <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Listening… speak now</span>
-                            )}
-                        </div>
-                    )}
-
-                    {/* ── Committed final captions ──────────────────────────── */}
-                    {captions.length === 0 && !interimText ? (
-                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                            {active ? 'Waiting for speech…' : 'Start listening to see captions'}
-                        </div>
-                    ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                            {captions.map((c) => (
-                                <div key={c.id} style={{ padding: '10px 14px', borderRadius: 10, background: 'var(--bg-base)', borderLeft: '3px solid var(--color-accent)' }}>
-                                    <div style={{ fontSize: '1rem', marginBottom: 4 }}>{c.text}</div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                                        <span>{c.confidence > 0 ? `${(c.confidence * 100).toFixed(0)}% confidence` : ''}</span>
-                                        <span>{c.time}</span>
-                                    </div>
+                {captions.map((c, idx) => {
+                    const showTime = idx === 0 || captions[idx - 1]?.time !== c.time;
+                    return (
+                        <div key={c.id} className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                            {showTime && (
+                                <div style={{ textAlign: 'center', fontSize: '0.65rem', color: 'var(--text-muted)', margin: '4px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                                    <span>{c.time}</span>
+                                    {c.lang && (
+                                        <span style={{ background: 'rgba(108,99,255,0.15)', color: '#C4B5FD', padding: '1px 5px', borderRadius: 4, fontSize: '0.55rem', fontWeight: 700, textTransform: 'uppercase' }}>
+                                            {c.lang}
+                                        </span>
+                                    )}
                                 </div>
-                            ))}
-                            <div ref={captionEndRef} />
+                            )}
+                            <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+                                <div className="bubble-other" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    <span style={{ fontSize: '0.95rem', fontWeight: 600 }}>{c.text}</span>
+                                    {c.nativeText && c.nativeText !== c.text && (
+                                        <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.45)', fontStyle: 'italic', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 4, marginTop: 2 }}>
+                                            "{c.nativeText}"
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
                         </div>
-                    )}
+                    );
+                })}
+
+                {/* Processing indicator */}
+                {processing && (
+                    <div style={{ display: 'flex', justifyContent: 'flex-start' }} className="fade-in">
+                        <div className="bubble-interim" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <RefreshCw size={14} style={{ color: 'var(--color-accent)', animation: 'spin 1s linear infinite' }} />
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                                Translating to {targetLang}...
+                            </span>
+                        </div>
+                    </div>
+                )}
+                <div ref={captionEndRef} />
+            </div>
+
+            {/* ── Scroll hint ────────────────────────────────────────── */}
+            {!atBottom && (
+                <div
+                    onClick={() => { captionEndRef.current?.scrollIntoView({ behavior: 'smooth' }); setAtBottom(true); }}
+                    style={{ textAlign: 'center', fontSize: '0.72rem', color: 'var(--text-muted)', padding: '4px 0', cursor: 'pointer' }}
+                >
+                    ˅ Scroll to bottom
+                </div>
+            )}
+
+            {/* ── Bottom controls ─────────────────────────────────────── */}
+            <div style={{
+                background: 'var(--bg-surface)',
+                borderTop: '1px solid var(--border-color)',
+                padding: '0.75rem 1rem',
+                paddingBottom: 'calc(0.75rem + var(--nav-height))',
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    {/* VAD Waveform bars */}
+                    <div style={{ flex: 1, display: 'flex', gap: 2, alignItems: 'center', height: 40, overflow: 'hidden' }}>
+                        {barHeights.map((h, i) => (
+                            <div key={i} style={{
+                                flex: 1,
+                                borderRadius: 3,
+                                background: `hsl(${163 + i * 2}, 80%, ${active ? 55 : 25}%)`,
+                                height: `${h}px`,
+                                maxHeight: 36,
+                                opacity: active ? 1 : 0.25,
+                                transition: 'height 0.06s ease',
+                            }} />
+                        ))}
+                    </div>
+                    {/* Mic FAB */}
+                    <button
+                        className={`fab-mic ${active ? 'recording' : ''}`}
+                        onClick={() => setActive(a => !a)}
+                    >
+                        <Mic size={24} color={active ? '#000' : '#000'} />
+                    </button>
+                </div>
+                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginTop: 6, fontWeight: 500 }}>
+                    🔒 Audio securely translated in real-time
                 </div>
             </div>
         </AppLayout>
@@ -224,4 +367,3 @@ const SpeechAssistPage = () => {
 };
 
 export default SpeechAssistPage;
-
