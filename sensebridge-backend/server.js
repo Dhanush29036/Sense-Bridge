@@ -52,8 +52,8 @@ app.use(
 );
 
 // ─── Body parsing ──────────────────────────────────────────────────────────────
-app.use(express.json({ limit: '10kb' })); // prevent large payload attacks
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' })); // Increased for audio/video payloads
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ─── HTTP request logger ───────────────────────────────────────────────────────
 if (process.env.NODE_ENV !== 'test') {

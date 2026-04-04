@@ -35,6 +35,8 @@ const SpeechAssistPage = () => {
     const isSpeakingRef   = useRef(false);
     const silenceStartRef = useRef(0);
     const chunkStartRef   = useRef(0);
+    const lastSentRef     = useRef(0);   // rate-limit: timestamp of last API call
+    const MIN_SEND_INTERVAL_MS = 4000;  // at most 1 request per 4 seconds
 
     // ── Emit multimodal events ───────────────────────────────────────────
     useEffect(() => {
@@ -47,7 +49,13 @@ const SpeechAssistPage = () => {
 
     // ── Backend Chunk Processor ──────────────────────────────────────────
     const processChunk = async (blob) => {
-        if (blob.size < 4000) return; // Ignore tiny empty blobs
+        // Ignore tiny/empty blobs (raised threshold to avoid wasting quota on noise)
+        if (blob.size < 12000) return;
+
+        // Client-side rate limiter — max 1 request per 4 seconds
+        const now = Date.now();
+        if (now - lastSentRef.current < MIN_SEND_INTERVAL_MS) return;
+        lastSentRef.current = now;
         
         const reader = new FileReader();
         reader.readAsDataURL(blob);
@@ -69,14 +77,24 @@ const SpeechAssistPage = () => {
                             text: data.translated,
                             nativeText: data.text,
                             lang: data.sourceLang,
-                            isMe: false, // Defaulting to incoming speech
+                            isMe: false,
                         }]);
-                        
-                        // Fire multimodal fusion event
                         window.dispatchEvent(new CustomEvent('sb:speech', { 
                             detail: { text: data.translated, isFinal: true, lang: data.sourceLang } 
                         }));
                     }
+                } else if (res.status === 429 || res.status === 500) {
+                    // Show quota/server error as a system caption
+                    setCaptions(prev => [...prev, {
+                        id: Date.now(),
+                        time: new Date().toLocaleTimeString(),
+                        text: res.status === 429
+                            ? '⚠️ AI quota limit reached — please wait a moment.'
+                            : '⚠️ Transcription failed — please try again.',
+                        nativeText: '',
+                        lang: 'system',
+                        isMe: false,
+                    }]);
                 }
             } catch (err) {
                 console.error('[Speech] Translation error:', err);

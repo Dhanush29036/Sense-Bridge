@@ -24,7 +24,7 @@ router.post('/format-sentence', auth, async (req, res) => {
         const prompt = `You are an assistive communication AI. Convert these gesture words into one natural, grammatically correct English sentence. Words: [${words.join(', ')}]. Reply ONLY with the sentence, no explanation or quotes.`;
 
         const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+            `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -112,7 +112,7 @@ Output STRICTLY in this JSON format:
 }`;
 
         const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+            `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -135,6 +135,10 @@ Output STRICTLY in this JSON format:
 
         if (!response.ok) {
             const errBody = await response.text();
+            // Forward quota errors (429) directly to client
+            if (response.status === 429) {
+                return res.status(429).json({ error: 'AI quota limit reached. Please wait a moment and try again.' });
+            }
             throw new Error(`Gemini API error: ${response.status} - ${errBody}`);
         }
         
