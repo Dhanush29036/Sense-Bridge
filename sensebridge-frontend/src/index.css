@@ -531,3 +531,18 @@ body {
   border-radius: 24px;
   padding: 2rem;
 }
+
+/* ─── Leaflet map fixes ──────────────────────────────────────────────────── */
+.leaflet-container {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 16px;
+  z-index: 1;
+}
+.leaflet-tile-pane {
+  opacity: 1 !important;
+}
+.leaflet-control-container .leaflet-top,
+.leaflet-control-container .leaflet-bottom {
+  z-index: 2;
+}
