@@ -242,7 +242,7 @@ const GestureAssistPage = () => {
         captionRef.current?.scrollTo({ top: captionRef.current.scrollHeight, behavior: 'smooth' });
     }, [captions, liveSentence]);
 
-    // ── sentence finisher: after 2.5 s of no new words, commit ──────────
+    // ── sentence finisher: after 3 s of no new words, commit ───────────
     const commitSentence = useCallback(async (currentWords) => {
         if (!currentWords.length) return;
         clearTimeout(formTimer.current);
@@ -255,25 +255,41 @@ const GestureAssistPage = () => {
             { id: Date.now(), text: sentence, time: new Date().toLocaleTimeString() }
         ].slice(-20));
         window.dispatchEvent(new CustomEvent('sb:gesture', { detail: { sentence } }));
+        // Auto-speak the completed sentence
+        cancelSpeech();
+        speak(sentence, { priority: 'high', rate: 1.0 });
+        setIsSpeaking(true);
+        setTimeout(() => setIsSpeaking(false), sentence.length * 70 + 500);
         setWords([]);
         setLiveSentence('');
-    }, []);
+    }, [token]);
 
     const scheduleCommit = useCallback((wds) => {
         clearTimeout(formTimer.current);
-        formTimer.current = setTimeout(() => commitSentence(wds), 2500);
+        formTimer.current = setTimeout(() => commitSentence(wds), 3000);
     }, [commitSentence]);
 
     // ── add a word from gesture ──────────────────────────────────────────
     const addWord = useCallback((gesture) => {
+        // "fist" (Stop) gesture commits the current sentence immediately
+        if (gesture === 'fist') {
+            setWords(prev => {
+                if (prev.length > 0) commitSentence(prev);
+                return prev; // commitSentence will clear it
+            });
+            return;
+        }
+
         const meta = GESTURE_META[gesture];
         if (!meta) return;
         const word = meta.word;
         const now  = Date.now();
-        if (now - lastAddedRef.current < 1800) return; // debounce
+        if (now - lastAddedRef.current < 1200) return; // 1.2s debounce
         lastAddedRef.current = now;
 
         setWords(prev => {
+            // Prevent consecutive duplicate words
+            if (prev.length > 0 && prev[prev.length - 1] === word) return prev;
             const next = [...prev, word];
             setLiveSentence(next.join(' ') + ' …');
             scheduleCommit(next);
@@ -294,7 +310,7 @@ const GestureAssistPage = () => {
             confidence: 0.9,
             metadata: { gesture, word },
         }).catch(() => {});
-    }, [scheduleCommit]);
+    }, [scheduleCommit, commitSentence]);
 
     // ── MediaPipe bootstrap ───────────────────────────────────────────────
     const loadScripts = () => new Promise((resolve, reject) => {
@@ -354,10 +370,10 @@ const GestureAssistPage = () => {
 
                         if (held.gesture === gesture) {
                             const heldMs = now - held.start;
-                            setConfidence(Math.min(1, heldMs / 1200));
-                            if (heldMs >= 1200) {
+                            setConfidence(Math.min(1, heldMs / 800));
+                            if (heldMs >= 800) {
                                 addWord(gesture);
-                                heldRef.current = { gesture: null, start: 0 }; // reset so next hold starts fresh
+                                heldRef.current = { gesture: null, start: 0 };
                             }
                         } else {
                             heldRef.current = { gesture, start: now };
@@ -494,7 +510,7 @@ const GestureAssistPage = () => {
                 >
                     {captions.length === 0 && !liveSentence && (
                         <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem', textAlign: 'center', padding: '0.5rem 0' }}>
-                            {active ? 'Hold a gesture for 1.2 s to add a word…' : 'Start tracking to see live captions'}
+                            {active ? 'Hold gesture 0.8s → add word · Fist → send sentence' : 'Start tracking to see live captions'}
                         </div>
                     )}
                     {captions.map(c => (
@@ -632,7 +648,7 @@ const GestureAssistPage = () => {
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
                     <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>Low</span>
-                    <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>Hold 1.2 s → adds word</span>
+                    <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>Hold 0.8s → word · ✊ → send</span>
                     <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>High</span>
                 </div>
             </div>

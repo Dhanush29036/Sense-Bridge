@@ -376,10 +376,10 @@ const NavigationPage = () => {
                     </div>
                 )}
 
-                {/* ── Main grid ────────────────────────────────────────────*/}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '1.25rem' }}>
+                {/* ── Main layout (stacked for mobile) ────────────────────*/}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
                     {/* ── Map ────────────────────────────────────────────── */}
-                    <div style={{ borderRadius: 16, overflow: 'hidden', height: 480, position: 'relative' }}>
+                    <div style={{ borderRadius: 16, overflow: 'hidden', width: '100%', height: 'clamp(300px, 55vh, 520px)', position: 'relative' }}>
                         <MapContainer
                             center={mapCenter}
                             zoom={15}
@@ -446,7 +446,7 @@ const NavigationPage = () => {
                         </button>
                     </div>
 
-                    {/* ── Right panel ────────────────────────────────────── */}
+                    {/* ── Info panel (below map on mobile) ────────────── */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                         {/* GPS status */}
                         <div className="card">
