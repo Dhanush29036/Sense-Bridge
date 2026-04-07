@@ -15,6 +15,7 @@ from typing import Optional
 # ─── Known average real-world heights (meters) ────────────────────────────────
 #     Adjust these for your specific camera / use case.
 REFERENCE_HEIGHTS_M = {
+    # ─── Original SenseBridge classes ─────────────────────────────
     "person":        1.70,
     "car":           1.50,
     "motorcycle":    1.10,
@@ -22,11 +23,44 @@ REFERENCE_HEIGHTS_M = {
     "bus":           3.50,
     "truck":         3.00,
     "door":          2.10,
-    "stairs":        0.20,   # average stair step height
-    "crosswalk":     0.10,   # marking stripe width
+    "stairs":        0.20,
+    "crosswalk":     0.10,
     "obstacle":      0.50,
     "signboard":     0.60,
-    "currency_note": 0.066,  # Indian INR note height
+    "currency_note": 0.066,
+    # ─── COCO classes (common obstacles for blind users) ──────────
+    "train":         4.00,
+    "fire hydrant":  0.75,
+    "stop sign":     0.75,
+    "bench":         0.85,
+    "dog":           0.50,
+    "cat":           0.30,
+    "horse":         1.60,
+    "cow":           1.40,
+    "elephant":      3.00,
+    "bear":          1.50,
+    "chair":         0.90,
+    "couch":         0.85,
+    "bed":           0.60,
+    "dining table":  0.75,
+    "toilet":        0.70,
+    "bottle":        0.25,
+    "cup":           0.12,
+    "bowl":          0.10,
+    "cell phone":    0.15,
+    "laptop":        0.30,
+    "tv":            0.60,
+    "refrigerator":  1.80,
+    "oven":          0.85,
+    "microwave":     0.35,
+    "sink":          0.40,
+    "book":          0.25,
+    "clock":         0.30,
+    "backpack":      0.50,
+    "umbrella":      1.00,
+    "suitcase":      0.60,
+    "traffic light": 1.00,
+    "parking meter": 1.20,
 }
 
 # Focal length in pixels (calibrate with checkerboard or known object at known distance)
