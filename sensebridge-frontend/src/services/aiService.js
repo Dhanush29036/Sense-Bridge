@@ -261,9 +261,9 @@ export function analyzeFrameForHazards(videoElement) {
         rowEdge.push(edgeSum / SAMPLE_W);
     }
 
-    // Stair pattern: alternating high/low edge rows with regularity
+    // Stair pattern: alternating high/low edge rows with strong regularity
     const edgeMean = rowEdge.reduce((s, v) => s + v, 0) / rowEdge.length;
-    const edgeThresh = edgeMean * 1.6;
+    const edgeThresh = edgeMean * 2.0;   // stricter: was 1.6
     let highEdgeCount = 0, transitions = 0, wasHigh = false;
     for (const e of rowEdge) {
         const isHigh = e > edgeThresh;
@@ -271,7 +271,8 @@ export function analyzeFrameForHazards(videoElement) {
         if (isHigh !== wasHigh) transitions++;
         wasHigh = isHigh;
     }
-    const stairScore = transitions >= 6 && highEdgeCount > 4;
+    // Much stricter: require 10+ transitions AND 8+ high-edge rows (was 6/4)
+    const stairScore = transitions >= 10 && highEdgeCount > 8;
 
     // ── 2. Central-column vertical brightness gradient → drop ahead ───────
     //    In a drop scenario the floor disappears → brightness changes sharply
@@ -283,13 +284,13 @@ export function analyzeFrameForHazards(videoElement) {
     brightTop /= midH;
     brightBot /= (SAMPLE_H - midH);
 
-    // Drop: lower half much darker than upper half (void/pit below)
-    const dropScore = brightTop > 80 && brightBot < brightTop * 0.55;
+    // Drop: lower half much darker than upper half (stricter: was 0.55)
+    const dropScore = brightTop > 100 && brightBot < brightTop * 0.35;
 
     // ── 3. Slope: sustained brightness gradient across full column ─────────
     let slopeGrad = 0;
     for (let y = 0; y < SAMPLE_H - 4; y++) slopeGrad += gray(midX, y+4) - gray(midX, y);
-    const slopeScore = Math.abs(slopeGrad / SAMPLE_H) > 8;
+    const slopeScore = Math.abs(slopeGrad / SAMPLE_H) > 15;   // stricter: was 8
 
     if (!stairScore && !dropScore && !slopeScore) return null;
 
@@ -297,7 +298,7 @@ export function analyzeFrameForHazards(videoElement) {
         stair:      stairScore,
         drop:       dropScore,
         slope:      slopeScore && !stairScore && !dropScore,
-        confidence: stairScore ? 0.75 : dropScore ? 0.80 : 0.65,
+        confidence: stairScore ? 0.75 : dropScore ? 0.80 : 0.55,  // slopes now below 0.85 threshold
     };
 }
 
@@ -330,7 +331,7 @@ export const startObjectDetection = async (videoElement, onDetection) => {
 
         if (videoElement.readyState >= 2) {
             // Run inference inside tf.tidy to avoid memory leaks
-            const raw = await _visionModel.detect(videoElement, 20, 0.40);
+            const raw = await _visionModel.detect(videoElement, 40, 0.30);
             const filtered = nms(raw);
 
             const W = videoElement.videoWidth || 640;

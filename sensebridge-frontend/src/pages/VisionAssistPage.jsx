@@ -19,11 +19,20 @@ import {
     ChevronLeft,
 } from 'lucide-react';
 
-// ── Obstacle classes ──────────────────────────────────────────────────────
+// ── ALL 80 COCO classes — detect everything the model can see ─────────────
 const OBSTACLE_CLASSES = new Set([
-    'person','bicycle','car','motorcycle','bus','truck','dog','cat','horse','cow',
-    'chair','couch','dining table','bench','bed','potted plant','fire hydrant',
-    'stop sign','traffic light','parking meter','suitcase','backpack',
+    'person','bicycle','car','motorcycle','airplane','bus','train','truck',
+    'boat','traffic light','fire hydrant','stop sign','parking meter','bench',
+    'bird','cat','dog','horse','sheep','cow','elephant','bear','zebra','giraffe',
+    'backpack','umbrella','handbag','tie','suitcase','frisbee',
+    'skis','snowboard','sports ball','kite','baseball bat','baseball glove',
+    'skateboard','surfboard','tennis racket','bottle','wine glass','cup',
+    'fork','knife','spoon','bowl','banana','apple','sandwich','orange',
+    'broccoli','carrot','hot dog','pizza','donut','cake','chair','couch',
+    'potted plant','bed','dining table','toilet','tv','laptop','mouse',
+    'remote','keyboard','cell phone','microwave','oven','toaster','sink',
+    'refrigerator','book','clock','vase','scissors','teddy bear',
+    'hair drier','toothbrush',
 ]);
 const MOVING_CLASSES = new Set(['person','bicycle','car','motorcycle','bus','truck','dog','cat','horse']);
 
@@ -176,7 +185,7 @@ const VisionAssistPage = () => {
                             const H = vid.videoHeight || 480;
                             frameRef.current++;
                             const obs = result.detections
-                                .filter(d => OBSTACLE_CLASSES.has(d.label) && d.confidence > 0.48)
+                                .filter(d => OBSTACLE_CLASSES.has(d.label) && d.confidence > 0.35)
                                 .map(d => ({ ...d, distance: estimateDistance(d.pctBbox), direction: getDirection(d.pctBbox) }));
                             const tracked = trackerRef.current.update(obs, W, H);
                             const hasPerson = tracked.some(d => d.label === 'person');
@@ -219,13 +228,16 @@ const VisionAssistPage = () => {
                                     if (canSpeak(`med-${label}-${d.direction}`, 7000)) { doSpeak(`${label} nearby on ${d.direction}`); addAlert(`${label} nearby on ${d.direction}`); }
                                 }
                             }
-                            if (frameRef.current % 10 === 0) {
+                            // Hazard analysis every 30 frames with stricter confidence filter
+                            if (frameRef.current % 30 === 0) {
                                 const h = analyzeFrameForHazards(vid);
-                                setHazard(h);
-                                if (h) {
+                                // Only accept hazards with high confidence to prevent false positives
+                                const validHazard = h && h.confidence >= 0.85;
+                                setHazard(validHazard ? h : null);
+                                if (validHazard) {
                                     window.dispatchEvent(new CustomEvent('sb:vision', { detail: { hazard: h } }));
                                     const type = h.stair ? 'stair' : h.drop ? 'drop' : 'slope';
-                                    if (canSpeak(`hazard-${type}`, 8000)) { doSpeak(HAZARD_CFG[type].msg, h.drop); addAlert(HAZARD_CFG[type].label, h.drop); }
+                                    if (canSpeak(`hazard-${type}`, 12000)) { doSpeak(HAZARD_CFG[type].msg, h.drop); addAlert(HAZARD_CFG[type].label, h.drop); }
                                 }
                             }
                         });
