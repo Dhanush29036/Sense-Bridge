@@ -2,7 +2,7 @@
   <img src="screenshots/dashboard.png" width="600" alt="SenseBridge Dashboard" />
 </p>
 
-<h1 align="center">🌉 SenseBridge</h1>
+<h1 align="center">🌉 SenseBridge </h1>
 <h3 align="center">AI-Powered Assistive Technology for the Differently Abled</h3>
 
 <p align="center">
