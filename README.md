@@ -329,10 +329,9 @@ Sense-Bridge/
 | Name | Role |
 |---|---|
 | **Subha Dhanush Pasala** | Full Stack Developer & AI Engineer |
-| Team Member 2 | _(Add your team member)_ |
-| Team Member 3 | _(Add your team member)_ |
-| Team Member 4 | _(Add your team member)_ |
-| Team Member 5 | _(Add your team member)_ |
+| **Somu Palasa** | Frontend Developer & AI/ML Engineer |
+| **Rohan Chowdary** | UI/UX Designer & Researcher |
+| **Tejaswini** | Backend Developer & Testing |
 
 ---
 
