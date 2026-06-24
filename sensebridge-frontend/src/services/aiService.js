@@ -8,7 +8,7 @@
  * TTS              : Speak Queue with priority + voice selection
  */
 
-import { logService } from './api';
+import { apiUrl, logService } from './api';
 import * as tf from '@tensorflow/tfjs';
 import '@tensorflow/tfjs-backend-webgl';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
@@ -541,7 +541,7 @@ if (typeof window !== 'undefined') {
 export const formatGestureSentence = async (words, token) => {
     if (!words?.length) return '';
     try {
-        const res = await fetch('/api/ai/format-sentence', {
+        const res = await fetch(apiUrl('/api/ai/format-sentence'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
             body: JSON.stringify({ words }),

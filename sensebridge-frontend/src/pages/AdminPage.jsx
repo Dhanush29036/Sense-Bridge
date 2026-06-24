@@ -13,7 +13,7 @@ import {
     RefreshCw, Crown, UserX, UserCheck, ExternalLink,
 } from 'lucide-react';
 
-const GRAFANA_URL   = 'http://localhost:3000';
+const GRAFANA_URL   = (import.meta.env.VITE_GRAFANA_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
 const DASHBOARD_UID = 'sensebridge-api';
 const DASH_SLUG     = 'sensebridge-api-monitoring';
 

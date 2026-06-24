@@ -27,19 +27,42 @@ connectDB();
 
 const app = express();
 
+const defaultDevOrigins = [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:5175',
+    'http://localhost',
+    'capacitor://localhost',
+];
+
 // ─── Security headers ──────────────────────────────────────────────────────────
 app.use(helmet());
 
 // ─── CORS ──────────────────────────────────────────────────────────────────────
 const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
-    : [];
+    ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+    : ((process.env.NODE_ENV || 'development') === 'production' ? [] : defaultDevOrigins);
+
+const originMatchers = allowedOrigins.map((origin) => {
+    if (origin.includes('*')) {
+        const escaped = origin
+            .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+            .replace(/\*/g, '.*');
+        return new RegExp(`^${escaped}$`);
+    }
+    return origin;
+});
 
 app.use(
     cors({
         origin: (origin, callback) => {
             // Allow requests with no origin (mobile apps, Postman, server-to-server)
-            if (!origin || allowedOrigins.includes(origin)) {
+            const isAllowed = !origin || originMatchers.some((matcher) =>
+                matcher instanceof RegExp ? matcher.test(origin) : matcher === origin
+            );
+
+            if (isAllowed) {
                 callback(null, true);
             } else {
                 callback(new Error(`CORS: Origin '${origin}' not allowed.`));
@@ -102,13 +125,21 @@ app.use(errorHandler);
 
 // ─── Start server ──────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT) || 5000;
-const server = app.listen(PORT, () => {
-    console.log(`🚀  SenseBridge API running on port ${PORT} [${process.env.NODE_ENV || 'development'}]`);
-});
+let server = null;
+if (require.main === module) {
+    server = app.listen(PORT, () => {
+        console.log(`🚀  SenseBridge API running on port ${PORT} [${process.env.NODE_ENV || 'development'}]`);
+    });
+}
 
 // ─── Graceful shutdown ─────────────────────────────────────────────────────────
 const shutdown = (signal) => {
     console.log(`\n${signal} received — shutting down gracefully...`);
+    if (!server) {
+        process.exit(0);
+        return;
+    }
+
     server.close(() => {
         console.log('🛑  HTTP server closed.');
         process.exit(0);
@@ -121,5 +152,11 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-    server.close(() => process.exit(1));
+    if (server) {
+        server.close(() => process.exit(1));
+        return;
+    }
+    process.exit(1);
 });
+
+module.exports = app;

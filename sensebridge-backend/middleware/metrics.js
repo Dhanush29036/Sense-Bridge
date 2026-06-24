@@ -105,7 +105,7 @@ const metricsMiddleware = (req, res, next) => {
 let _User = null;
 const refreshUserGauges = async () => {
     try {
-        if (!_User) _User = require('./models/User');
+        if (!_User) _User = require('../models/User');
         const [total, active] = await Promise.all([
             _User.countDocuments(),
             _User.countDocuments({ isActive: true }),

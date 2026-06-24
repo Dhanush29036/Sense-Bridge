@@ -5,8 +5,15 @@ import axios from 'axios';
  * Base URL uses Vite proxy in dev (/api → http://localhost:5000/api)
  * In production set VITE_API_URL in .env
  */
+const rawApiBaseUrl = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
+export const API_BASE_URL = rawApiBaseUrl;
+export const apiUrl = (path = '') => {
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    return `${API_BASE_URL}${normalizedPath}`;
+};
+
 const api = axios.create({
-    baseURL: `${import.meta.env.VITE_API_URL || ''}/api`,
+    baseURL: apiUrl('/api'),
     timeout: 10000,
     headers: { 'Content-Type': 'application/json' },
 });

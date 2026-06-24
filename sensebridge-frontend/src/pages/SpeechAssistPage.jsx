@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import AppLayout from '../layouts/AppLayout';
 import { useAuth } from '../context/AuthContext';
 import { ChevronLeft, Copy, Trash2, Mic, RefreshCw, Languages } from 'lucide-react';
+import { apiUrl } from '../services/api';
 
 const BAR_COUNT = 28;
 const MAX_CHUNK_MS = 8000;  // Force chunk if speaking for 8s
@@ -63,7 +64,7 @@ const SpeechAssistPage = () => {
             const base64Audio = reader.result.split(',')[1];
             setProcessing(true);
             try {
-                const res = await fetch('/api/ai/transcribe-translate', {
+                const res = await fetch(apiUrl('/api/ai/transcribe-translate'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                     body: JSON.stringify({ audioBase64: base64Audio, targetLang })

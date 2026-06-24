@@ -15,6 +15,7 @@
 
 import { createContext, useContext, useRef, useState, useEffect, useCallback } from 'react';
 import { useAuth } from './AuthContext';
+import { apiUrl } from '../services/api';
 
 // ─── Event names ─────────────────────────────────────────────────────────────
 export const EV_VISION  = 'sb:vision';
@@ -104,7 +105,7 @@ export const MultimodalFusionProvider = ({ children }) => {
 
             // ── Try cloud fusion (Gemini backend) ──────────────────────
             if (token) {
-                const res = await fetch('/api/ai/fuse', {
+                const res = await fetch(apiUrl('/api/ai/fuse'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                     body: JSON.stringify(payload),

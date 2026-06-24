@@ -4,6 +4,18 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom', 'react-router-dom'],
+          tf: ['@tensorflow/tfjs', '@tensorflow/tfjs-backend-webgl'],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {
