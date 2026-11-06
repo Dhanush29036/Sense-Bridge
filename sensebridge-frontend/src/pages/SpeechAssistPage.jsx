@@ -275,7 +275,6 @@ const SpeechAssistPage = () => {
                         detail: { text: translated, isFinal: true, lang: detected || targetLang.code, confidence: conf }
                     }));
                 }
-                }
             } catch (err) {
                 console.warn('[Speech] Translation error:', err);
             } finally {

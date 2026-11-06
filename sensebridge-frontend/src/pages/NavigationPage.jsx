@@ -304,24 +304,6 @@ const NavigationPage = () => {
         return () => window.removeEventListener('sb:vision', onVisionSignal);
     }, [announceWarning]);
 
-    // ── Voice command support (vc:start / vc:stop events from VoiceCommandContext) ──
-    useEffect(() => {
-        const onStart = () => {
-            if (route) {
-                startNavigation();
-            } else {
-                speak('Please search or select a destination first to start navigation.', { priority: 'high' });
-            }
-        };
-        const onStop  = () => stopNavigation();
-        window.addEventListener('vc:start', onStart);
-        window.addEventListener('vc:stop',  onStop);
-        return () => {
-            window.removeEventListener('vc:start', onStart);
-            window.removeEventListener('vc:stop',  onStop);
-        };
-    }, [route, startNavigation, stopNavigation]);
-
     // ── GPS tracking & Hazard Proximity Monitor ──────────────────────────
     const startGPS = useCallback(() => {
         if (!navigator.geolocation) { setError('Geolocation not supported.'); return; }
@@ -348,11 +330,11 @@ const NavigationPage = () => {
                         if (state.arrived) {
                             announceWarning('You have arrived at your destination!', 'arrival', true);
                             setNavigating(false);
-                        } else if (state.distanceToNext <= 12 && lastSpokenTurnRef.current.phase !== `now-${state.currentStepIdx}`) {
-                            // Imminent turn: "Turn now! In 10 meters, turn left..."
+                        } else if (state.distanceToNext <= 15 && lastSpokenTurnRef.current.phase !== `now-${state.currentStepIdx}`) {
+                            // Imminent turn: "Turn now! In 12 meters, turn left..."
                             lastSpokenTurnRef.current = { stepIdx: state.currentStepIdx, phase: `now-${state.currentStepIdx}` };
                             announceWarning(`Turn now! In ${state.distanceToNext} meters, ${clean}`, `turn-now-${state.currentStepIdx}`, true);
-                        } else if (state.distanceToNext <= 45 && state.distanceToNext > 15 && lastSpokenTurnRef.current.phase !== `pre-${state.currentStepIdx}`) {
+                        } else if (state.distanceToNext <= 50 && state.distanceToNext > 15 && lastSpokenTurnRef.current.phase !== `pre-${state.currentStepIdx}`) {
                             // Approaching turn: "In 35 meters, turn left..."
                             lastSpokenTurnRef.current = { stepIdx: state.currentStepIdx, phase: `pre-${state.currentStepIdx}` };
                             announceWarning(`In ${state.distanceToNext} meters, ${clean}`, `turn-pre-${state.currentStepIdx}`, false);
@@ -398,6 +380,65 @@ const NavigationPage = () => {
             { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
         );
     }, [navigating, route, userAddr, nearbyFeatures, announceWarning]);
+
+    // ── Start / Stop navigation ───────────────────────────────────────────
+    const stopNavigation = useCallback(() => {
+        setNavigating(false);
+        cancelSpeech();
+        speak('Navigation stopped.', { priority: 'high' });
+    }, []);
+
+    const startNavigation = useCallback(() => {
+        if (!route) {
+            speak('Please search or select a destination first to start navigation.', { priority: 'high' });
+            return;
+        }
+        setNavigating(true);
+        setCurrentStep(0);
+        setLastSpokenStep(-1);
+        lastSpokenTurnRef.current = { stepIdx: -1, phase: '' };
+        const firstStep = route.steps?.[0];
+        if (firstStep) {
+            const clean = firstStep.instruction?.split('—')?.[0]?.trim() || firstStep.instruction || 'Proceed straight';
+            const distText = distToNext ? `${distToNext} meters` : formatDist(firstStep.distance || 15);
+            const msg = `Starting navigation. First direction: ${clean}. In ${distText}.`;
+            announceWarning(msg, 'nav-start', true);
+        }
+        if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+        startGPS();
+    }, [route, distToNext, startGPS, announceWarning]);
+
+    // ── Speak current direction on demand ─────────────────────────────────
+    const speakCurrentDirection = useCallback(() => {
+        if (!route || !route.steps) {
+            speak('No active route. Please search or pick a destination first.', { priority: 'high' });
+            return;
+        }
+        const cur = route.steps[currentStep];
+        if (!cur) return;
+        const clean = cur.instruction?.split('—')?.[0]?.trim() || cur.instruction || '';
+        const distMsg = distToNext !== null ? `In ${distToNext} meters, ` : (cur.distance ? `For ${formatDist(cur.distance)}, ` : '');
+        const fullMsg = `Direction guidance: ${distMsg}${clean}.`;
+        playWarningBeep(880, 120);
+        setLastSpokenAlert(fullMsg);
+        speak(fullMsg, { priority: 'high', rate: 1.0 });
+    }, [route, currentStep, distToNext]);
+
+    // ── Voice command support (vc:start / vc:stop / vc:direction) ─────────
+    useEffect(() => {
+        const onStart     = () => { if (route) startNavigation(); else speak('Please search or select a destination first to start navigation.', { priority: 'high' }); };
+        const onStop      = () => stopNavigation();
+        const onDirection = () => speakCurrentDirection();
+
+        window.addEventListener('vc:start',     onStart);
+        window.addEventListener('vc:stop',      onStop);
+        window.addEventListener('vc:direction', onDirection);
+        return () => {
+            window.removeEventListener('vc:start',     onStart);
+            window.removeEventListener('vc:stop',      onStop);
+            window.removeEventListener('vc:direction', onDirection);
+        };
+    }, [route, startNavigation, stopNavigation, speakCurrentDirection]);
 
     useEffect(() => {
         startGPS();
@@ -492,25 +533,6 @@ const NavigationPage = () => {
         }
     }, [userPos]);
 
-    // ── Start / Stop navigation ───────────────────────────────────────────
-    const startNavigation = () => {
-        if (!route) return;
-        setNavigating(true);
-        setCurrentStep(0);
-        setLastSpokenStep(-1);
-        lastSpokenTurnRef.current = { stepIdx: -1, phase: '' };
-        const firstStep = route.steps[0];
-        if (firstStep) announceStepWithDistance(firstStep, 0);
-        if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
-        startGPS();
-    };
-
-    const stopNavigation = () => {
-        setNavigating(false);
-        cancelSpeech();
-        speak('Navigation stopped.', { priority: 'high' });
-    };
-
     // ── Recalculate route (if user drifted off-path) ───────────────────────
     const recalculate = async () => {
         if (!userPos || !destination) return;
@@ -533,7 +555,7 @@ const NavigationPage = () => {
     const mapCenter = userPos || [12.9716, 77.5946]; // default: Bangalore
 
     return (
-        <AppLayout>
+        <AppLayout title="Navigation & Guidance">
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
                 {/* ── Header ────────────────────────────────────────────── */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -601,17 +623,54 @@ const NavigationPage = () => {
                                     </div>
                                 )}
                             </div>
-                            <button onClick={() => announceStepWithDistance(step, currentStep)}
-                                className="btn btn-ghost" title="Repeat aloud" style={{ flexShrink: 0, padding: '0.5rem' }}>
-                                <Volume2 size={18} />
+                            <button onClick={() => speakCurrentDirection()}
+                                className="btn btn-primary" title="Repeat direction aloud" style={{ flexShrink: 0, padding: '0.55rem 0.85rem', gap: 5 }}>
+                                <Volume2 size={16} /> Repeat
                             </button>
                         </div>
-                        {/* Progress bar */}
-                        <div style={{ marginTop: 12, height: 4, background: 'var(--border-color)', borderRadius: 4 }}>
-                            <div style={{ height: '100%', width: `${progress}%`, background: 'var(--color-primary)', borderRadius: 4, transition: 'width 0.5s' }} />
+
+                        {/* Step Navigation Controls */}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, gap: 8, flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', gap: 6 }}>
+                                <button
+                                    className="btn btn-ghost"
+                                    disabled={currentStep <= 0}
+                                    onClick={() => {
+                                        const prevIdx = Math.max(0, currentStep - 1);
+                                        setCurrentStep(prevIdx);
+                                        announceStepWithDistance(route.steps[prevIdx], prevIdx);
+                                    }}
+                                    style={{ fontSize: '0.75rem', padding: '5px 10px', gap: 4 }}
+                                >
+                                    <ArrowLeft size={13} /> Prev Turn
+                                </button>
+                                <button
+                                    className="btn btn-ghost"
+                                    disabled={currentStep >= route.steps.length - 1}
+                                    onClick={() => {
+                                        const nextIdx = Math.min(route.steps.length - 1, currentStep + 1);
+                                        setCurrentStep(nextIdx);
+                                        announceStepWithDistance(route.steps[nextIdx], nextIdx);
+                                    }}
+                                    style={{ fontSize: '0.75rem', padding: '5px 10px', gap: 4 }}
+                                >
+                                    Next Turn <ArrowRight size={13} />
+                                </button>
+                            </div>
+                            <button
+                                className="btn btn-ghost"
+                                onClick={() => {
+                                    speak(`Step ${currentStep + 1} of ${route.steps.length}. ${step.instruction}. Distance: ${formatDist(step.distance)}.`, { priority: 'high' });
+                                }}
+                                style={{ fontSize: '0.72rem', color: 'var(--color-primary)', padding: '4px 8px' }}
+                            >
+                                Step {currentStep + 1} of {route.steps.length}
+                            </button>
                         </div>
-                        <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: 4, textAlign: 'right' }}>
-                            Step {currentStep + 1} of {route.steps.length} · {route.summary}
+
+                        {/* Progress bar */}
+                        <div style={{ marginTop: 10, height: 4, background: 'var(--border-color)', borderRadius: 4 }}>
+                            <div style={{ height: '100%', width: `${progress}%`, background: 'var(--color-primary)', borderRadius: 4, transition: 'width 0.5s' }} />
                         </div>
                     </div>
                 )}
@@ -939,6 +998,38 @@ const NavigationPage = () => {
                                     </button>
                                 )}
                             </div>
+
+                            {/* Quick Airport / Transit / City Destination Chips */}
+                            <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                {[
+                                    { label: '🛫 Airport Gate', query: 'Airport Gate' },
+                                    { label: '🚊 Metro Station', query: 'Metro Station' },
+                                    { label: '🚻 Restroom', query: 'Restroom' },
+                                    { label: '🚪 Exit Gate', query: 'Exit' },
+                                    { label: 'ℹ️ Help Desk', query: 'Information Desk' },
+                                    { label: '🧳 Baggage Claim', query: 'Baggage Claim' }
+                                ].map((chip, idx) => (
+                                    <button
+                                        key={idx}
+                                        className="btn btn-ghost"
+                                        onClick={() => {
+                                            setSearchQuery(chip.query);
+                                            const basePos = userPos || [12.9716, 77.5946];
+                                            const destLat = basePos[0] + (idx % 2 === 0 ? 0.0018 : -0.0015);
+                                            const destLon = basePos[1] + (idx > 2 ? 0.0022 : -0.0018);
+                                            selectDestination({
+                                                lat: destLat,
+                                                lon: destLon,
+                                                display_name: `${chip.label}, SenseBridge Guidance Target`
+                                            });
+                                        }}
+                                        style={{ fontSize: '0.73rem', padding: '4px 8px', borderRadius: 8, background: 'rgba(108,99,255,0.08)', border: '1px solid rgba(108,99,255,0.2)' }}
+                                    >
+                                        {chip.label}
+                                    </button>
+                                ))}
+                            </div>
+
                             {suggestions.length > 0 && (
                                 <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 200, overflowY: 'auto' }}>
                                     {suggestions.map((s, i) => (
