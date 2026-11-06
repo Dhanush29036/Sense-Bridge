@@ -1,83 +1,177 @@
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { useVoiceCommands } from '../context/VoiceCommandContext';
-import { Home, Eye, MessageSquare, Hand, ScrollText, Settings, Mic, MicOff } from 'lucide-react';
+import { useFusion } from '../context/MultimodalFusionContext';
+import {
+    Home,
+    History,
+    FlaskConical,
+    Settings,
+    ChevronLeft,
+    Settings2,
+    Mic,
+    AlertTriangle,
+} from 'lucide-react';
 
-const NAV_ITEMS = [
-    { to: '/dashboard', label: 'Home',    icon: Home },
-    { to: '/vision',    label: 'Vision',  icon: Eye,            roles: ['blind', 'mixed'] },
-    { to: '/speech',    label: 'Speech',  icon: MessageSquare,  roles: ['deaf', 'mixed'] },
-    { to: '/gesture',   label: 'Gesture', icon: Hand,           roles: ['mute', 'deaf', 'mixed'] },
-    { to: '/logs',      label: 'Logs',    icon: ScrollText },
-    { to: '/settings',  label: 'Settings', icon: Settings },
+const TABS = [
+    { to: '/dashboard', label: 'Home',        Icon: Home },
+    { to: '/logs',      label: 'History',     Icon: History },
+    { to: '/research',  label: 'Experiments', Icon: FlaskConical },
+    { to: '/settings',  label: 'Settings',    Icon: Settings },
 ];
 
-const AppLayout = ({ children, noPad = false }) => {
-    const { user } = useAuth();
+/**
+ * AppLayout — iOS-style shell with sticky top bar + bottom tab bar.
+ *
+ * Props:
+ *   title       — page title shown in top bar
+ *   showBack    — show a back chevron (navigates to -1)
+ *   backLabel   — label for back button (default "Back")
+ *   rightAction — JSX element on the right side of top bar
+ *   noPad       — if true, remove inner padding (for full-bleed camera pages)
+ *   hideTabs    — hide the bottom tab bar
+ *   noScroll    — don't add overflow scroll to main area
+ */
+const AppLayout = ({
+    children,
+    title        = 'SenseBridge',
+    showBack     = false,
+    backLabel    = 'Back',
+    rightAction  = null,
+    noPad        = false,
+    hideTabs     = false,
+    noScroll     = false,
+}) => {
+    const { user }  = useAuth();
     const { theme } = useTheme();
-    const { enabled: vcEnabled, setEnabled: setVcEnabled, listening, feedback } = useVoiceCommands();
+    const { enabled: vcEnabled, setEnabled: setVcEnabled, feedback } = useVoiceCommands();
+    const location  = useLocation();
+    const navigate  = useNavigate();
 
-    const visibleItems = NAV_ITEMS.filter(
-        item => !item.roles || user?.isAdmin || item.roles.includes(user?.role)
-    );
+    const activeTab = TABS.find(t => location.pathname.startsWith(t.to));
 
     return (
-        <div data-theme={theme} className="mobile-shell">
-            {/* Voice feedback toast */}
+        <div data-theme={theme} className="app-shell" style={{ fontFamily: 'var(--font-sans)' }}>
+
+            {/* ── Voice feedback toast ─────────────────────────────────── */}
             {feedback && (
                 <div style={{
-                    position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)',
-                    background: 'rgba(108,99,255,0.95)', color: '#fff',
-                    padding: '6px 18px', borderRadius: 20, fontSize: '0.78rem', fontWeight: 600,
-                    whiteSpace: 'nowrap', zIndex: 300,
-                    boxShadow: '0 4px 20px rgba(108,99,255,0.4)',
-                    animation: 'fadeIn 0.15s ease',
+                    position: 'fixed', top: 72, left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: 'rgba(30,30,46,0.92)',
+                    backdropFilter: 'blur(12px)',
+                    color: '#E0E7FF',
+                    padding: '8px 18px',
+                    borderRadius: 9999,
+                    fontSize: '0.82rem',
+                    fontWeight: 600,
+                    boxShadow: '0 4px 20px rgba(0,0,0,0.25)',
+                    zIndex: 999,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    animation: 'fadeIn 0.2s ease forwards',
+                    whiteSpace: 'nowrap',
                 }}>
-                    🎙 {feedback}
+                    <Mic size={13} color="#818CF8" />
+                    <span>{feedback}</span>
                 </div>
             )}
 
-            {/* Page content */}
-            {noPad
-                ? <div style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingBottom: 'var(--nav-height)', overflow: 'hidden' }}>{children}</div>
-                : <div className="page-content">{children}</div>
-            }
+            {/* ── Top Bar ──────────────────────────────────────────────── */}
+            <header className="top-bar">
+                {/* Left: back or voice mic */}
+                <div style={{ width: 80, display: 'flex', alignItems: 'center' }}>
+                    {showBack ? (
+                        <button className="top-bar-back" onClick={() => navigate(-1)}>
+                            <ChevronLeft size={20} />
+                            <span>{backLabel}</span>
+                        </button>
+                    ) : (
+                        <button
+                            className="top-bar-action"
+                            onClick={() => setVcEnabled(!vcEnabled)}
+                            title={vcEnabled ? 'Disable voice commands' : 'Enable voice commands'}
+                        >
+                            <Mic size={19} color={vcEnabled ? 'var(--blue)' : 'var(--text-dim)'} />
+                        </button>
+                    )}
+                </div>
 
-            {/* Bottom navigation */}
-            <nav className="bottom-nav">
-                {/* Voice toggle - compact */}
-                <button
-                    onClick={() => setVcEnabled(v => !v)}
-                    title={`Voice ${vcEnabled ? 'ON' : 'OFF'}`}
-                    style={{
-                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                        gap: 4, flex: 0.6, border: 'none', background: 'none', cursor: 'pointer', padding: 0,
-                        color: vcEnabled ? 'var(--color-accent)' : 'var(--text-muted)',
-                        fontSize: '0.6rem', fontWeight: 600,
-                        position: 'relative',
-                    }}
-                >
-                    {vcEnabled && listening
-                        ? <Mic size={20} style={{ animation: 'pulse-ring 1.6s ease-out infinite' }} />
-                        : vcEnabled
-                        ? <Mic size={20} />
-                        : <MicOff size={20} />
-                    }
-                    {listening ? 'Live' : vcEnabled ? 'Voice' : 'Muted'}
-                </button>
+                {/* Center: title */}
+                <div className="top-bar-title">{title}</div>
 
-                {visibleItems.map(({ to, label, icon: Icon }) => (
-                    <NavLink
-                        key={to}
-                        to={to}
-                        className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-                    >
-                        <Icon size={22} strokeWidth={1.75} />
-                        <span>{label}</span>
-                    </NavLink>
-                ))}
-            </nav>
+                {/* Right: action or settings */}
+                <div style={{ minWidth: 80, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+                    {location.pathname !== '/emergency' && (
+                        <button
+                            onClick={() => navigate('/emergency')}
+                            style={{
+                                background: 'linear-gradient(135deg, #FF4B6E, #E03131)',
+                                color: '#FFFFFF',
+                                border: 'none',
+                                borderRadius: 14,
+                                padding: '4px 9px',
+                                fontSize: '0.73rem',
+                                fontWeight: 800,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                cursor: 'pointer',
+                                boxShadow: '0 2px 8px rgba(255, 75, 110, 0.45)',
+                                letterSpacing: '0.04em',
+                                flexShrink: 0,
+                            }}
+                            title="Emergency SOS"
+                        >
+                            <AlertTriangle size={13} strokeWidth={2.6} />
+                            <span>SOS</span>
+                        </button>
+                    )}
+                    {rightAction ?? (
+                        <button
+                            className="top-bar-action"
+                            onClick={() => navigate('/settings')}
+                            title="Settings"
+                        >
+                            <Settings2 size={19} color="var(--text-muted)" />
+                        </button>
+                    )}
+                </div>
+            </header>
+
+            {/* ── Page Content ─────────────────────────────────────────── */}
+            <main
+                className={noPad ? 'page-scroll-noPad' : 'page-scroll'}
+                style={noScroll ? { overflow: 'hidden' } : {}}
+            >
+                {children}
+            </main>
+
+            {/* ── Bottom Tab Bar ───────────────────────────────────────── */}
+            {!hideTabs && (
+                <nav className="bottom-tab-bar">
+                    {TABS.map(({ to, label, Icon }) => {
+                        const isActive = location.pathname === to ||
+                            (to === '/dashboard' && location.pathname === '/');
+                        return (
+                            <NavLink
+                                key={to}
+                                to={to}
+                                className={`tab-item${isActive ? ' active' : ''}`}
+                            >
+                                <Icon
+                                    size={24}
+                                    strokeWidth={isActive ? 2.2 : 1.8}
+                                    color={isActive ? 'var(--blue)' : 'var(--text-dim)'}
+                                />
+                                <span>{label}</span>
+                            </NavLink>
+                        );
+                    })}
+                </nav>
+            )}
         </div>
     );
 };

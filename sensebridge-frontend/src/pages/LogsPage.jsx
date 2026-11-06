@@ -33,12 +33,14 @@ const LogsPage = () => {
                 ...(filter.severity  && { severity:  filter.severity }),
             };
             const { data } = await logService.getAll(params);
-            setLogs(data.data);
-            setTotal(data.total);
-            setPages(data.pages);
+            setLogs(data?.data || []);
+            setTotal(data?.total || 0);
+            setPages(data?.pages || 1);
             setPage(p);
-        } catch {
-            toast.error('Failed to load logs');
+        } catch (err) {
+            console.warn('[Logs] Offline or load error:', err);
+            setLogs([]);
+            setTotal(0);
         } finally {
             setLoading(false);
         }
@@ -58,27 +60,26 @@ const LogsPage = () => {
     };
 
     return (
-        <AppLayout>
-            {/* Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.25rem' }}>
-                <button className="icon-btn" onClick={() => navigate('/dashboard')}>
-                    <ChevronLeft size={20} />
-                </button>
-                <div style={{ flex: 1 }}>
+        <AppLayout title="History">
+            {/* Header info */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
+                <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <ScrollText size={18} style={{ color: 'var(--color-primary)' }} />
-                        <span style={{ fontSize: '1.15rem', fontWeight: 800 }}>Activity Logs</span>
+                        <ScrollText size={18} style={{ color: 'var(--blue)' }} />
+                        <span style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)' }}>Activity Logs</span>
                     </div>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 1 }}>{total} AI events recorded</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>{total} AI events recorded</div>
                 </div>
-                <button onClick={() => fetchLogs(1)} className="icon-btn" title="Refresh">
-                    <RefreshCw size={16} />
-                </button>
-                {logs.length > 0 && (
-                    <button onClick={handleClear} className="icon-btn" title="Clear all" style={{ color: 'var(--color-danger)' }}>
-                        <Trash2 size={16} />
+                <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => fetchLogs(1)} className="btn-icon" title="Refresh">
+                        <RefreshCw size={16} color="var(--text-secondary)" />
                     </button>
-                )}
+                    {logs.length > 0 && (
+                        <button onClick={handleClear} className="btn-icon" title="Clear all" style={{ color: 'var(--red)' }}>
+                            <Trash2 size={16} color="var(--red)" />
+                        </button>
+                    )}
+                </div>
             </div>
 
             {/* Filters */}

@@ -20,64 +20,82 @@ export const useVoiceCommands = () => useContext(VoiceCommandContext);
 
 // ── Command table ──────────────────────────────────────────────────────────
 // Each entry: { keywords, action, label, tts }
-// keywords: any phrase containing one of these strings triggers the command
+// Specific multi-word commands come first to prevent generic keyword collisions.
 const COMMANDS = [
-    // ── Page actions (dispatched as CustomEvents) ────────────────────────
-    // These specific actions must come BEFORE generic navigation to prevent collisions
-    { keywords: ['start vision', 'start vision assist', 'begin vision', 'activate camera', 'turn on camera'],
+    // ── Module-specific Start Actions ─────────────────────────────────────
+    { keywords: ['start vision', 'start the vision', 'begin vision', 'activate camera', 'turn on camera', 'enable camera', 'start camera'],
       action: 'event', event: 'vc:start',  path: '/vision',   label: 'Start Vision Assist',
       tts: 'Starting Vision Assist camera' },
-    { keywords: ['stop vision', 'stop vision assist', 'deactivate camera', 'turn off camera'],
+    { keywords: ['stop vision', 'stop the vision', 'deactivate camera', 'turn off camera', 'disable camera', 'stop camera'],
       action: 'event', event: 'vc:stop',    label: 'Stop Vision Assist',
       tts: 'Stopping camera' },
-    { keywords: ['start speech', 'start speech assist', 'begin listening', 'activate microphone'],
+
+    { keywords: ['start speech', 'start the speech', 'begin listening', 'activate microphone', 'turn on microphone', 'enable microphone', 'start microphone', 'start recording', 'start listening'],
       action: 'event', event: 'vc:start',  path: '/speech',   label: 'Start Speech Assist',
       tts: 'Starting Speech Assist microphone' },
-    { keywords: ['stop speech', 'stop speech assist', 'deactivate microphone', 'stop recording'],
+    { keywords: ['stop speech', 'stop the speech', 'deactivate microphone', 'stop recording', 'turn off microphone', 'stop listening'],
       action: 'event', event: 'vc:stop',    label: 'Stop Speech Assist',
       tts: 'Stopping microphone' },
-    { keywords: ['start gesture', 'start gesture assist', 'begin gesture'],
+
+    { keywords: ['start gesture', 'start the gesture', 'begin gesture', 'turn on gesture', 'activate gesture', 'enable gesture', 'start signs'],
       action: 'event', event: 'vc:start',  path: '/gesture',   label: 'Start Gesture Assist',
       tts: 'Starting Gesture Assist detection' },
-    { keywords: ['stop gesture', 'stop gesture assist', 'deactivate gesture'],
+    { keywords: ['stop gesture', 'stop the gesture', 'deactivate gesture', 'turn off gesture', 'disable gesture'],
       action: 'event', event: 'vc:stop',    label: 'Stop Gesture Assist',
       tts: 'Stopping gesture detection' },
-    { keywords: ['start navigation', 'begin navigation', 'start guidance'],
+
+    { keywords: ['start navigation', 'begin navigation', 'start guidance', 'start route'],
       action: 'event', event: 'vc:start',  path: '/navigation',   label: 'Start Navigation',
       tts: 'Starting navigation' },
-    { keywords: ['stop navigation', 'stop guidance', 'cancel navigation'],
+    { keywords: ['stop navigation', 'stop guidance', 'cancel navigation', 'end navigation'],
       action: 'event', event: 'vc:stop',    label: 'Stop Navigation',
       tts: 'Stopping navigation' },
-    { keywords: ['send sos', 'trigger sos', 'emergency alert'],
+
+    { keywords: ['send sos', 'trigger sos', 'emergency alert', 'send emergency'],
       action: 'event', event: 'vc:sos',     path: '/emergency', label: 'Send SOS',
       tts: 'Triggering SOS alert' },
 
-    // ── Navigation ──────────────────────────────────────────────────────
-    { keywords: ['dashboard', 'home', 'go home', 'main page'],
+    // ── Navigation ("Open X") ─────────────────────────────────────────────
+    { keywords: ['open dashboard', 'go to dashboard', 'dashboard', 'open home', 'go home', 'home', 'main page'],
       action: 'navigate', path: '/dashboard',   label: 'Dashboard',
       tts: 'Opening Dashboard' },
-    { keywords: ['vision assist', 'vision', 'camera', 'detect objects', 'object detection'],
+    { keywords: ['open vision assist', 'open vision', 'vision assist', 'vision', 'open camera', 'detect objects', 'object detection'],
       action: 'navigate', path: '/vision',      label: 'Vision Assist',
       tts: 'Opening Vision Assist' },
-    { keywords: ['speech assist', 'speech', 'captions', 'transcribe', 'speech to text'],
+    { keywords: ['open speech assist', 'open speech', 'speech assist', 'speech', 'speech to text', 'captions', 'transcribe'],
       action: 'navigate', path: '/speech',      label: 'Speech Assist',
       tts: 'Opening Speech Assist' },
-    { keywords: ['gesture assist', 'gesture', 'sign language', 'hand gesture'],
+    { keywords: ['open gesture assist', 'open gesture', 'gesture assist', 'gesture', 'sign language', 'hand gesture'],
       action: 'navigate', path: '/gesture',     label: 'Gesture Assist',
       tts: 'Opening Gesture Assist' },
-    { keywords: ['navigation', 'maps', 'directions', 'navigate to', 'path guidance', 'map'],
+    { keywords: ['open navigation', 'open maps', 'open map', 'navigation', 'maps', 'directions', 'navigate to', 'path guidance', 'map'],
       action: 'navigate', path: '/navigation',  label: 'Navigation',
       tts: 'Opening Navigation and path guidance' },
-    { keywords: ['emergency', 'danger', 'sos', 'help me', 'i need help', 'call help'],
+    { keywords: ['open emergency', 'emergency', 'danger', 'open sos', 'sos', 'help me', 'i need help', 'call help'],
       action: 'navigate', path: '/emergency',   label: 'Emergency',
       tts: 'Opening Emergency page. Stay calm.' },
-    { keywords: ['logs', 'history', 'activity log'],
+    { keywords: ['open experiments', 'open research', 'experiments', 'research mode', 'experiment mode', 'ablation', 'research'],
+      action: 'navigate', path: '/research',    label: 'Experiments',
+      tts: 'Opening Research and Experiments' },
+    { keywords: ['open multimodal', 'multimodal', 'sensor fusion', 'fusion mode'],
+      action: 'navigate', path: '/multimodal',  label: 'Multimodal Fusion',
+      tts: 'Opening Multimodal Fusion' },
+    { keywords: ['open logs', 'logs', 'open history', 'history', 'activity log'],
       action: 'navigate', path: '/logs',        label: 'Logs',
       tts: 'Opening Activity Logs' },
-    { keywords: ['settings', 'preferences', 'configuration'],
+    { keywords: ['open settings', 'settings', 'preferences', 'configuration'],
       action: 'navigate', path: '/settings',    label: 'Settings',
       tts: 'Opening Settings' },
 
+    // ── Generic Start / Stop for Current Active Module ────────────────────
+    { keywords: ['start now', 'start detection', 'start', 'begin', 'activate', 'turn on'],
+      action: 'event', event: 'vc:start',       label: 'Start Active Module',
+      tts: 'Starting' },
+    { keywords: ['stop now', 'stop detection', 'stop', 'pause', 'deactivate', 'turn off', 'halt'],
+      action: 'event', event: 'vc:stop',        label: 'Stop Active Module',
+      tts: 'Stopping' },
+
+    // ── Scrolling & Back ──────────────────────────────────────────────────
     { keywords: ['scroll down', 'page down'],
       action: 'scroll', dir: 300,               label: 'Scroll Down',
       tts: '' },
@@ -97,14 +115,13 @@ const COMMANDS = [
       tts: 'Voice control disabled' },
 ];
 
-const HELP_TEXT = `You can say: Open Vision Assist, Open Speech Assist, Open Gesture Assist,
-Open Navigation, Open Emergency, Open Dashboard, Open Settings, Open Logs,
-Start Camera, Stop Camera, Start Listening, Stop Listening,
-Send SOS, Go Back, Scroll Down, Scroll Up, Stop Voice Control.`;
+const HELP_TEXT = `You can say: Open Vision, Open Speech, Open Gesture, Open Navigation,
+Open Experiments, Open Emergency, Open Dashboard, Open Settings, Open Logs,
+Start, Stop, Send SOS, Go Back, Scroll Down, Scroll Up.`;
 
 // ── Fuzzy match: does transcript contain any of the keywords? ─────────────
 function matchCommand(transcript) {
-    const t = transcript.toLowerCase().trim();
+    const t = transcript.toLowerCase().replace(/[.,!?]/g, '').trim();
     for (const cmd of COMMANDS) {
         if (cmd.keywords.some(kw => t.includes(kw))) return cmd;
     }
@@ -147,10 +164,13 @@ export const VoiceCommandProvider = ({ children }) => {
         showFeedback(`"${transcript}" → ${cmd.label}`);
 
         let state = undefined;
+        if (cmd.event === 'vc:start') {
+            state = { autoStart: true };
+        }
         if (cmd.path === '/navigation') {
             const match = transcript.match(/(?:navigate to|directions to)\s+(.+)/i);
             if (match && match[1]) {
-                state = { destinationQuery: match[1].trim(), autoNavigate: true };
+                state = { ...state, destinationQuery: match[1].trim(), autoNavigate: true };
             }
         }
 
@@ -160,7 +180,8 @@ export const VoiceCommandProvider = ({ children }) => {
 
         switch (cmd.action) {
             case 'event':
-                // Small delay to ensure navigation completes if path was changed
+                // Small delay to ensure navigation completes if path was changed, 
+                // but we also rely on autoStart state for robustness.
                 const dispatch = () => window.dispatchEvent(new CustomEvent(cmd.event, { detail: { source: 'voice' } }));
                 if (cmd.path) setTimeout(dispatch, 800); else dispatch();
                 break;

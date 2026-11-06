@@ -115,15 +115,13 @@ class FallDetector:
                 self._phase_times["impact"] = now
 
         elif self._state == FallState.IMPACT:
-            # Wait for motionless phase (low variance)
-            elapsed = now - self._phase_times.get("impact", now)
-            if elapsed > 0.8:  # check 0.8s after impact
-                if self._is_motionless():
-                    self._state = FallState.CONFIRMED
-                    self._trigger_confirmation()
-                else:
-                    # Recovered — likely a stumble, not a fall
-                    self._reset()
+            # Check for motionless phase (low variance / flat sensor samples)
+            if self._is_motionless():
+                self._state = FallState.CONFIRMED
+                self._trigger_confirmation()
+            elif (now - self._phase_times.get("impact", now)) > 1.5:
+                # Recovered after 1.5s without motionless state — likely a stumble
+                self._reset()
 
     def _is_motionless(self) -> bool:
         """Compute standard deviation of last 0.5s of samples."""

@@ -125,7 +125,13 @@ class ModeAdapter:
         if criticals:
             return max(criticals, key=lambda s: s.raw_score)
 
-        # Rule 2: Sort by mode preference, then by raw_score as tiebreaker
+        # Rule 1b: In BLIND/MIXED mode, HIGH object hazards take precedence over lower informational signals
+        if user_mode in (UserMode.BLIND, UserMode.MIXED):
+            high_hazards = [s for s in non_ignored if s.priority == AlertPriority.HIGH and s.source == "object"]
+            if high_hazards:
+                return max(high_hazards, key=lambda s: s.raw_score)
+
+        # Rule 2: Respect user-mode source priority order, using raw_score as tiebreaker
         order = MODE_SOURCE_ORDER.get(user_mode, MODE_SOURCE_ORDER[UserMode.MIXED])
         source_rank = {src: i for i, src in enumerate(order)}
 

@@ -44,10 +44,10 @@ class ContextBuffer:
         cooldown_s:     float = 5.0,
         speech_pause_s: float = 3.0,
     ):
-        self._max_size   = max_size
-        self._cooldown   = cooldown_s
+        self._max_size     = max_size
+        self._cooldown     = cooldown_s
         self._speech_pause = speech_pause_s
-        self._lock = threading.Lock()
+        self._lock         = threading.Lock()
 
         self._history:    deque[BufferedAlert] = deque(maxlen=max_size)
         self._last_alert: dict[str, float]     = {}     # label → timestamp
@@ -61,7 +61,7 @@ class ContextBuffer:
 
         Checks:
           1. Per-label cooldown
-          2. Global speech pause (object alerts suppressed while user is speaking)
+          2. Global speech pause (object alerts suppressed while speech is recently active)
           3. CRITICAL priority always bypasses suppression
         """
         with self._lock:
@@ -84,8 +84,8 @@ class ContextBuffer:
 
     def notify_speech_activity(self) -> None:
         """
-        Explicitly signal that the user is speaking right now.
-        Resets the speech pause timer without recording a full alert.
+        Explicitly signal that speech occurred.
+        Resets the speech pause timer for subsequent frames.
         """
         with self._lock:
             self._last_speech = time.monotonic()
@@ -106,14 +106,13 @@ class ContextBuffer:
 
     def should_escalate(self, label: str, base_priority: AlertPriority) -> AlertPriority:
         """
-        Escalate priority if same label seen ≥ 3 times in last 3s.
-        Ensures sustained hazards (car following user) are never downgraded.
+        Escalate priority if same label was recorded ≥ 2 times before in the window
+        (making this the 3rd or more encounter).
         """
         if base_priority in (AlertPriority.CRITICAL, AlertPriority.IGNORE):
             return base_priority
         count = self.count_recent_label(label, window_s=3.0)
-        if count >= 3:
-            # Escalate one level
+        if count >= 2:
             escalation_map = {
                 AlertPriority.LOW:    AlertPriority.MEDIUM,
                 AlertPriority.MEDIUM: AlertPriority.HIGH,
@@ -135,9 +134,16 @@ class ContextBuffer:
             return self._history[-1].label if self._history else None
 
     def clear(self) -> None:
+        """Clear active cooldowns (allows repeated alerts while preserving rolling history)."""
+        with self._lock:
+            self._last_alert.clear()
+
+    def reset(self) -> None:
+        """Fully reset buffer state including history and cooldowns."""
         with self._lock:
             self._history.clear()
             self._last_alert.clear()
+            self._last_speech = 0.0
 
     def force_suppress(self, label: str, duration_s: float = 30.0) -> None:
         """Manually suppress a label for duration_s (e.g., user dismissed it)."""

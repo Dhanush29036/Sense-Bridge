@@ -1,0 +1,20 @@
+{
+  "user_id": "test-user-dismiss",
+  "preferred_mode": "voice",
+  "voice_speed": 175,
+  "language": "en",
+  "high_contrast": false,
+  "large_text": false,
+  "font_scale": 1.0,
+  "label_weights": {
+    "chair": 0.4001
+  },
+  "dismiss_counts": {
+    "chair": 25
+  },
+  "reaction_counts": {},
+  "recent_labels": [],
+  "zone_risk": {},
+  "created_at": 1791365168.2701106,
+  "updated_at": 1791365961.8210757
+}

@@ -20,10 +20,12 @@ import {
     haversine, formatDist, formatTime,
 } from '../services/navigationService';
 import { speak, cancelSpeech } from '../services/aiService';
+import haptics from '../services/haptics';
 import {
     Navigation, MapPin, Search, Play, Square,
-    ChevronRight, Volume2, AlertTriangle, ArrowLeft,
-    ArrowRight, ArrowUp, Crosshair, Loader, RotateCcw
+    ChevronRight, Volume2, VolumeX, AlertTriangle, ArrowLeft,
+    ArrowRight, ArrowUp, Crosshair, Loader, RotateCcw,
+    ShieldAlert, Bell, Sparkles
 } from 'lucide-react';
 
 // Fix Leaflet default icon paths (Vite asset hashing breaks them)
@@ -34,6 +36,101 @@ L.Icon.Default.mergeOptions({
     iconUrl:       'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
     shadowUrl:     'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 });
+
+// ── Hazard & Warning Spoken Definitions with Live Distance ─────────────────
+const HAZARD_INFO = {
+    steps: {
+        title: 'Stairs / Steps Ahead',
+        icon: '🪜',
+        spoken: (d) => `Warning: Stairs ${d} meters ahead. Watch your step.`,
+        advice: 'Staircase or elevation change ahead. Watch your footing.',
+        color: '#FF6B6B',
+        badge: 'Warning'
+    },
+    crossing: {
+        title: 'Pedestrian Crossing Ahead',
+        icon: '🦓',
+        spoken: (d) => `Caution: Pedestrian crossing ${d} meters ahead. Look both ways.`,
+        advice: 'Zebra crossing. Look both ways before proceeding.',
+        color: '#FFA94D',
+        badge: 'Caution'
+    },
+    traffic_signals: {
+        title: 'Traffic Signals Ahead',
+        icon: '🚦',
+        spoken: (d) => `Traffic lights ${d} meters ahead.`,
+        advice: 'Wait for the pedestrian signal before crossing.',
+        color: '#FFD43B',
+        badge: 'Notice'
+    },
+    kerb: {
+        title: 'Curb Drop Ahead',
+        icon: '⚠️',
+        spoken: (d) => `Caution: Curb drop ${d} meters ahead.`,
+        advice: 'Pavement drop or uneven kerb ahead.',
+        color: '#FF922B',
+        badge: 'Caution'
+    },
+    construction: {
+        title: 'Construction Zone Ahead',
+        icon: '🚧',
+        spoken: (d) => `Warning: Construction zone ${d} meters ahead. Proceed with caution.`,
+        advice: 'Construction work or blocked walkway.',
+        color: '#FA5252',
+        badge: 'Warning'
+    },
+    obstacle: {
+        title: 'Obstacle Ahead',
+        icon: '🛑',
+        spoken: (d) => `Warning: Obstacle ${d} meters ahead in your path.`,
+        advice: 'Object detected directly in front of you. Divert your path.',
+        color: '#F03E3E',
+        badge: 'Hazard'
+    },
+    drop: {
+        title: 'Drop Edge Ahead',
+        icon: '⛔',
+        spoken: (d) => `Danger: Drop edge ${d} meters ahead. Stop!`,
+        advice: 'Steep ledge or platform drop ahead.',
+        color: '#E03131',
+        badge: 'Danger'
+    },
+    footway: {
+        title: 'Sidewalk / Footway Ahead',
+        icon: '🚶',
+        spoken: (d) => `Pedestrian sidewalk ${d} meters ahead.`,
+        advice: 'Safe pedestrian path available.',
+        color: '#20C997',
+        badge: 'Safe Path'
+    },
+    slope: {
+        title: 'Incline / Slope Ahead',
+        icon: '📐',
+        spoken: (d) => `Caution: Incline or slope ${d} meters ahead.`,
+        advice: 'Slope or ramp ahead. Watch your footing.',
+        color: '#6C63FF',
+        badge: 'Caution'
+    }
+};
+
+// Acoustic warning beep using Web Audio API
+const playWarningBeep = (freq = 880, duration = 120) => {
+    try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        gain.gain.setValueAtTime(0.08, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration / 1000);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + duration / 1000);
+    } catch {}
+};
 
 // ── Custom icons ──────────────────────────────────────────────────────────
 const userIcon = L.divIcon({
@@ -88,19 +185,134 @@ const NavigationPage = () => {
     const [loading, setLoading]         = useState('');      // status message
     const [error, setError]             = useState('');
     const [nearbyFeatures, setNearbyFeatures] = useState([]);
+    const [activeWarnings, setActiveWarnings] = useState([]); // warnings with live distance
     const [lastSpokenStep, setLastSpokenStep] = useState(-1);
+    const [lastSpokenAlert, setLastSpokenAlert] = useState('');
+    const [voiceAlertsEnabled, setVoiceAlertsEnabled] = useState(true);
     const [autoNavigateActive, setAutoNavigateActive] = useState(false);
     const [pendingAutoStartPlace, setPendingAutoStartPlace] = useState(null);
 
     const location = useLocation();
     const routerNavigate = useNavigate();
 
-    const watchIdRef  = useRef(null);
-    const searchTimer = useRef(null);
+    const watchIdRef            = useRef(null);
+    const searchTimer           = useRef(null);
+    const announcedWarningsRef  = useRef(new Map());
+    const lastSpokenTurnRef     = useRef({ stepIdx: -1, phase: '' });
+    const lastFeatureFetchRef   = useRef(0);
+
+    // ── Voice warning announcement with acoustic beep & distance ─────────
+    const announceWarning = useCallback((message, key, isHighPriority = false) => {
+        if (!voiceAlertsEnabled) return;
+        const now = Date.now();
+        const lastSpoken = announcedWarningsRef.current.get(key) || 0;
+        // Throttle repeats of the same hazard landmark to once every 16 seconds
+        if (now - lastSpoken < 16000) return;
+
+        announcedWarningsRef.current.set(key, now);
+        setLastSpokenAlert(message);
+        playWarningBeep(isHighPriority ? 960 : 840, 140);
+        haptics.warning();
+        speak(message, { priority: 'high', rate: 1.05 });
+    }, [voiceAlertsEnabled]);
+
+    // ── Announce turn step with exact distance ────────────────────────────
+    const announceStepWithDistance = useCallback((stepObj, stepIdx) => {
+        if (!stepObj) return;
+        const clean = stepObj.instruction?.split('—')?.[0]?.trim() || stepObj.instruction || '';
+        let textToSpeak = clean;
+        if (stepIdx === currentStep && distToNext !== null) {
+            textToSpeak = distToNext < 15
+                ? `Turn now! In ${distToNext} meters, ${clean}`
+                : `In ${distToNext} meters, ${clean}`;
+        } else if (stepObj.distance != null) {
+            textToSpeak = `${clean}. Distance: ${formatDist(stepObj.distance)}`;
+        }
+        setLastSpokenStep(stepIdx);
+        setLastSpokenAlert(textToSpeak);
+        playWarningBeep(720, 100);
+        speak(textToSpeak, { priority: 'high', rate: 1.0 });
+    }, [currentStep, distToNext]);
+
+    const announceStep = useCallback((text, idx) => {
+        announceStepWithDistance(route?.steps?.[idx] || { instruction: text }, idx);
+    }, [route, announceStepWithDistance]);
+
+    // ── Quick simulation trigger for testing distance alerts ─────────────
+    const triggerSimulatedWarning = (type, dist) => {
+        const info = HAZARD_INFO[type] || HAZARD_INFO.obstacle;
+        const msg = info.spoken(dist);
+        playWarningBeep(880, 140);
+        haptics.warning();
+        setLastSpokenAlert(msg);
+        speak(msg, { priority: 'high', rate: 1.05 });
+    };
+
+    // ── Listen to vision signals for camera obstacle detection ───────────
+    useEffect(() => {
+        const onVisionSignal = (e) => {
+            const d = e.detail;
+            if (!d) return;
+
+            if (d.hazard) {
+                // Structured hazard from analyzeFrameForHazards (stair/drop/slope)
+                const h = d.hazard;
+                const hazardType = h.stair ? 'steps' : h.drop ? 'drop' : 'slope';
+                const depthMeters = h.depth ? Math.round(h.depth) : (h.drop ? 1 : 3);
+                const info = HAZARD_INFO[hazardType] || HAZARD_INFO.obstacle;
+                const msg = info.spoken ? info.spoken(depthMeters) : `Warning: ${hazardType} ahead, ${depthMeters} meters.`;
+                announceWarning(msg, `vision-hazard-${hazardType}`, true);
+                setActiveWarnings(prev => {
+                    const filtered = prev.filter(w => w.type !== hazardType);
+                    return [{ type: hazardType, distance: depthMeters, source: 'camera' }, ...filtered].slice(0, 8);
+                });
+
+            } else if (d.detections && Array.isArray(d.detections)) {
+                // Array of detections from object detection loop
+                for (const det of d.detections) {
+                    const dist = det.pctBbox ? (() => {
+                        const area = det.pctBbox[2] * det.pctBbox[3];
+                        if (area > 900 || det.pctBbox[2] > 30) return 1;
+                        if (area > 200 || det.pctBbox[2] > 12) return 2;
+                        return 4;
+                    })() : 3;
+                    if (dist <= 2) {
+                        const name = det.label || 'obstacle';
+                        const info = HAZARD_INFO.obstacle;
+                        const msg = info.spoken ? info.spoken(dist) : `Warning: ${name} ${dist} meters ahead.`;
+                        announceWarning(msg, `vision-det-${name}`, true);
+                        setActiveWarnings(prev => {
+                            const filtered = prev.filter(w => !(w.type === 'obstacle' && w.name === name));
+                            return [{ type: 'obstacle', distance: dist, name, source: 'camera' }, ...filtered].slice(0, 8);
+                        });
+                    }
+                }
+
+            } else if (d.obstacle || (d.label && d.distance === 'close')) {
+                // Legacy close-obstacle signal
+                const name = d.obstacle || d.label;
+                const info = HAZARD_INFO.obstacle;
+                const msg = info.spoken ? info.spoken(1) : `Warning: ${name} directly ahead. Stop!`;
+                announceWarning(msg, `vision-close-${name}`, true);
+                setActiveWarnings(prev => {
+                    const filtered = prev.filter(w => !(w.type === 'obstacle' && w.name === name));
+                    return [{ type: 'obstacle', distance: 1, name, source: 'camera' }, ...filtered].slice(0, 8);
+                });
+            }
+        };
+        window.addEventListener('sb:vision', onVisionSignal);
+        return () => window.removeEventListener('sb:vision', onVisionSignal);
+    }, [announceWarning]);
 
     // ── Voice command support (vc:start / vc:stop events from VoiceCommandContext) ──
     useEffect(() => {
-        const onStart = () => { if (route) startNavigation(); };
+        const onStart = () => {
+            if (route) {
+                startNavigation();
+            } else {
+                speak('Please search or select a destination first to start navigation.', { priority: 'high' });
+            }
+        };
         const onStop  = () => stopNavigation();
         window.addEventListener('vc:start', onStart);
         window.addEventListener('vc:stop',  onStop);
@@ -108,9 +320,9 @@ const NavigationPage = () => {
             window.removeEventListener('vc:start', onStart);
             window.removeEventListener('vc:stop',  onStop);
         };
-    }, [route]); // re-bind if route changes so startNavigation uses fresh route
+    }, [route, startNavigation, stopNavigation]);
 
-    // ── GPS tracking ──────────────────────────────────────────────────────
+    // ── GPS tracking & Hazard Proximity Monitor ──────────────────────────
     const startGPS = useCallback(() => {
         if (!navigator.geolocation) { setError('Geolocation not supported.'); return; }
         watchIdRef.current = navigator.geolocation.watchPosition(
@@ -119,37 +331,73 @@ const NavigationPage = () => {
                 const newPos = [lat, lon];
                 setUserPos(newPos);
 
-                // Reverse geocode only occasionally
+                // Reverse geocode occasionally
                 if (!userAddr) {
                     reverseGeocode(lat, lon).then(setUserAddr).catch(() => {});
                 }
 
-                // Update navigation state if actively navigating
+                // 1. Update navigation state & announce turn with distance
                 if (navigating && route) {
                     setCurrentStep(prev => {
                         const state = computeNavigationState(newPos, route.steps, prev);
                         setDistToNext(state.distanceToNext);
 
+                        const curStep = route.steps[state.currentStepIdx];
+                        const clean = curStep?.instruction?.split('—')?.[0]?.trim() || curStep?.instruction || '';
+
                         if (state.arrived) {
-                            announceStep('You have arrived at your destination!', 999);
+                            announceWarning('You have arrived at your destination!', 'arrival', true);
                             setNavigating(false);
-                        } else if (state.nearingTurn && state.currentStepIdx !== lastSpokenStep) {
-                            const step = route.steps[state.currentStepIdx];
-                            if (step) announceStep(step.instruction, state.currentStepIdx);
+                        } else if (state.distanceToNext <= 12 && lastSpokenTurnRef.current.phase !== `now-${state.currentStepIdx}`) {
+                            // Imminent turn: "Turn now! In 10 meters, turn left..."
+                            lastSpokenTurnRef.current = { stepIdx: state.currentStepIdx, phase: `now-${state.currentStepIdx}` };
+                            announceWarning(`Turn now! In ${state.distanceToNext} meters, ${clean}`, `turn-now-${state.currentStepIdx}`, true);
+                        } else if (state.distanceToNext <= 45 && state.distanceToNext > 15 && lastSpokenTurnRef.current.phase !== `pre-${state.currentStepIdx}`) {
+                            // Approaching turn: "In 35 meters, turn left..."
+                            lastSpokenTurnRef.current = { stepIdx: state.currentStepIdx, phase: `pre-${state.currentStepIdx}` };
+                            announceWarning(`In ${state.distanceToNext} meters, ${clean}`, `turn-pre-${state.currentStepIdx}`, false);
                         }
+
                         return state.currentStepIdx;
                     });
                 }
 
-                // Nearby pedestrian features (throttled)
-                if (Math.random() < 0.05) { // ~5% of GPS updates
-                    getNearbyPedestrianFeatures(lat, lon, 80).then(setNearbyFeatures);
+                // 2. Fetch or update nearby pedestrian features & hazards
+                const now = Date.now();
+                if (now - lastFeatureFetchRef.current > 18000 || nearbyFeatures.length === 0) {
+                    lastFeatureFetchRef.current = now;
+                    getNearbyPedestrianFeatures(lat, lon, 100).then(features => {
+                        if (features && features.length) setNearbyFeatures(features);
+                    }).catch(() => {});
+                }
+
+                // 3. Compute live distance to all nearby features & announce close hazards aloud
+                if (nearbyFeatures.length > 0) {
+                    const withDist = nearbyFeatures.map(f => ({
+                        ...f,
+                        distance: Math.round(haversine(newPos, [f.lat, f.lon])),
+                    })).sort((a, b) => a.distance - b.distance);
+
+                    setActiveWarnings(withDist.filter(f => f.distance <= 60));
+
+                    // Check for nearest hazard within 40m
+                    const nearestHazard = withDist.find(f =>
+                        f.distance <= 40 &&
+                        ['steps', 'crossing', 'traffic_signals', 'kerb', 'construction', 'obstacle', 'drop'].includes(f.type)
+                    );
+
+                    if (nearestHazard) {
+                        const info = HAZARD_INFO[nearestHazard.type] || HAZARD_INFO.obstacle;
+                        const msg = info.spoken(nearestHazard.distance);
+                        const key = `${nearestHazard.type}-${Math.round(nearestHazard.lat * 1000)}-${Math.round(nearestHazard.lon * 1000)}`;
+                        announceWarning(msg, key, ['steps', 'obstacle', 'drop'].includes(nearestHazard.type));
+                    }
                 }
             },
             (err) => setError(`GPS error: ${err.message}`),
             { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
         );
-    }, [navigating, route, lastSpokenStep, userAddr]);
+    }, [navigating, route, userAddr, nearbyFeatures, announceWarning]);
 
     useEffect(() => {
         startGPS();
@@ -163,7 +411,6 @@ const NavigationPage = () => {
         if (location.state?.destinationQuery) {
             setSearchQuery(location.state.destinationQuery);
             if (location.state.autoNavigate) setAutoNavigateActive(true);
-            // clear state so it doesn't loop
             routerNavigate(location.pathname, { replace: true, state: {} });
         }
     }, [location.state, location.pathname, routerNavigate]);
@@ -208,8 +455,7 @@ const NavigationPage = () => {
                     // Auto-trigger navigation
                     setNavigating(true);
                     setLastSpokenStep(-1);
-                    if (r.steps[0]) announceStep(r.steps[0].instruction, 0);
-                    // Slight delay to ensure state updates before rebinding GPS
+                    if (r.steps[0]) announceStepWithDistance(r.steps[0], 0);
                     setTimeout(() => {
                         if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
                         startGPS();
@@ -221,7 +467,7 @@ const NavigationPage = () => {
             };
             runAutoStart();
         }
-    }, [pendingAutoStartPlace, userPos, loading, startGPS]);
+    }, [pendingAutoStartPlace, userPos, loading, startGPS, announceStepWithDistance]);
 
     // ── Select a destination from suggestions ─────────────────────────────
     const selectDestination = useCallback(async (place) => {
@@ -252,9 +498,9 @@ const NavigationPage = () => {
         setNavigating(true);
         setCurrentStep(0);
         setLastSpokenStep(-1);
-        const step = route.steps[0];
-        if (step) announceStep(step.instruction, 0);
-        // Restart GPS listener with navigating=true
+        lastSpokenTurnRef.current = { stepIdx: -1, phase: '' };
+        const firstStep = route.steps[0];
+        if (firstStep) announceStepWithDistance(firstStep, 0);
         if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
         startGPS();
     };
@@ -263,12 +509,6 @@ const NavigationPage = () => {
         setNavigating(false);
         cancelSpeech();
         speak('Navigation stopped.', { priority: 'high' });
-    };
-
-    // ── Voice announcement (deduplicated) ─────────────────────────────────
-    const announceStep = (text, stepIdx) => {
-        setLastSpokenStep(stepIdx);
-        speak(text, { priority: 'high', rate: 1.0 });
     };
 
     // ── Recalculate route (if user drifted off-path) ───────────────────────
@@ -361,7 +601,7 @@ const NavigationPage = () => {
                                     </div>
                                 )}
                             </div>
-                            <button onClick={() => announceStep(step.instruction, currentStep)}
+                            <button onClick={() => announceStepWithDistance(step, currentStep)}
                                 className="btn btn-ghost" title="Repeat aloud" style={{ flexShrink: 0, padding: '0.5rem' }}>
                                 <Volume2 size={18} />
                             </button>
@@ -375,6 +615,222 @@ const NavigationPage = () => {
                         </div>
                     </div>
                 )}
+
+                {/* ── Active Proximity Warnings & Hazard Distance Card ── */}
+                <div className="card" style={{
+                    borderColor: activeWarnings.filter(w => ['steps', 'crossing', 'traffic_signals', 'kerb', 'construction', 'obstacle', 'drop'].includes(w.type)).length > 0 ? 'rgba(255, 107, 107, 0.4)' : 'var(--border-color)',
+                    background: 'var(--bg-card)',
+                    padding: '1rem 1.25rem',
+                    borderRadius: 16,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.85rem'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div style={{
+                                width: 34, height: 34, borderRadius: 10,
+                                background: 'rgba(255, 107, 107, 0.15)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                color: '#FF6B6B'
+                            }}>
+                                <ShieldAlert size={20} />
+                            </div>
+                            <div>
+                                <div style={{ fontWeight: 700, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    Live Road Warnings & Distance
+                                    <span style={{
+                                        fontSize: '0.72rem', padding: '2px 8px', borderRadius: 10,
+                                        background: activeWarnings.filter(w => ['steps', 'crossing', 'traffic_signals', 'kerb', 'construction', 'obstacle', 'drop'].includes(w.type)).length > 0 ? 'rgba(255,75,110,0.18)' : 'rgba(32,201,151,0.18)',
+                                        color: activeWarnings.filter(w => ['steps', 'crossing', 'traffic_signals', 'kerb', 'construction', 'obstacle', 'drop'].includes(w.type)).length > 0 ? '#FF4B6E' : '#20C997',
+                                        fontWeight: 600
+                                    }}>
+                                        {activeWarnings.filter(w => ['steps', 'crossing', 'traffic_signals', 'kerb', 'construction', 'obstacle', 'drop'].includes(w.type)).length} active nearby
+                                    </span>
+                                </div>
+                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                    Hazards and crossings are spoken aloud with exact distance in meters
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Voice alert toggle */}
+                        <button
+                            onClick={() => setVoiceAlertsEnabled(!voiceAlertsEnabled)}
+                            className="btn btn-ghost"
+                            style={{
+                                fontSize: '0.78rem',
+                                padding: '6px 12px',
+                                gap: 6,
+                                background: voiceAlertsEnabled ? 'rgba(108, 99, 255, 0.1)' : 'rgba(255, 75, 110, 0.1)',
+                                color: voiceAlertsEnabled ? 'var(--color-primary)' : 'var(--color-danger)',
+                                border: `1px solid ${voiceAlertsEnabled ? 'rgba(108, 99, 255, 0.3)' : 'rgba(255, 75, 110, 0.3)'}`
+                            }}
+                            title="Toggle automatic spoken hazard alerts"
+                        >
+                            {voiceAlertsEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
+                            {voiceAlertsEnabled ? 'Voice Alerts: ON' : 'Voice Alerts: MUTED'}
+                        </button>
+                    </div>
+
+                    {/* Last spoken alert banner */}
+                    {lastSpokenAlert && (
+                        <div style={{
+                            background: 'linear-gradient(135deg, rgba(108, 99, 255, 0.12), rgba(0, 212, 170, 0.08))',
+                            border: '1px solid rgba(108, 99, 255, 0.3)',
+                            borderRadius: 10,
+                            padding: '8px 12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 10,
+                            fontSize: '0.82rem'
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
+                                <Bell size={15} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
+                                <span style={{ fontWeight: 600, color: 'var(--text-secondary)', flexShrink: 0 }}>Spoken Aloud:</span>
+                                <span style={{ color: 'var(--color-primary)', fontWeight: 600, fontStyle: 'italic', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                                    "{lastSpokenAlert}"
+                                </span>
+                            </div>
+                            <button
+                                onClick={() => speak(lastSpokenAlert, { priority: 'high', rate: 1.05 })}
+                                className="btn btn-ghost"
+                                style={{ padding: '3px 8px', fontSize: '0.72rem', flexShrink: 0, gap: 4 }}
+                                title="Replay last spoken alert"
+                            >
+                                <Volume2 size={13} /> Replay
+                            </button>
+                        </div>
+                    )}
+
+                    {/* Detected hazards list */}
+                    {activeWarnings.filter(w => ['steps', 'crossing', 'traffic_signals', 'kerb', 'construction', 'obstacle', 'drop'].includes(w.type)).length > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            {activeWarnings.filter(w => ['steps', 'crossing', 'traffic_signals', 'kerb', 'construction', 'obstacle', 'drop'].includes(w.type)).slice(0, 4).map((w, i) => {
+                                const info = HAZARD_INFO[w.type] || HAZARD_INFO.obstacle;
+                                return (
+                                    <div key={i} style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between',
+                                        padding: '8px 12px',
+                                        borderRadius: 10,
+                                        background: 'var(--bg-base)',
+                                        border: `1px solid ${info.color}33`,
+                                        gap: 10
+                                    }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                            <span style={{ fontSize: '1.25rem' }}>{info.icon}</span>
+                                            <div>
+                                                <div style={{ fontWeight: 600, fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                    {info.title}
+                                                    <span style={{
+                                                        fontSize: '0.68rem', padding: '1px 6px', borderRadius: 6,
+                                                        background: `${info.color}22`, color: info.color, fontWeight: 700
+                                                    }}>
+                                                        {info.badge}
+                                                    </span>
+                                                </div>
+                                                <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>{info.advice}</div>
+                                            </div>
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                                            <span style={{
+                                                fontWeight: 800, fontSize: '0.85rem', color: info.color,
+                                                background: `${info.color}18`, padding: '4px 8px', borderRadius: 8
+                                            }}>
+                                                {w.distance} m ahead
+                                            </span>
+                                            <button
+                                                className="btn btn-ghost"
+                                                onClick={() => {
+                                                    announceWarning(info.spoken(w.distance), `manual-${w.type}-${i}`, true);
+                                                }}
+                                                style={{ padding: '4px 8px', fontSize: '0.72rem', gap: 4 }}
+                                                title="Speak this warning aloud"
+                                            >
+                                                <Volume2 size={13} /> Speak
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <div style={{
+                            padding: '8px 12px',
+                            borderRadius: 8,
+                            background: 'var(--bg-base)',
+                            color: 'var(--text-muted)',
+                            fontSize: '0.78rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8
+                        }}>
+                            <Sparkles size={14} style={{ color: 'var(--color-primary)' }} />
+                            <span>No hazardous steps, drop-offs, or obstacles detected within 40m. Path clear!</span>
+                        </div>
+                    )}
+
+                    {/* Quick Simulation / Test Controls */}
+                    <div style={{
+                        marginTop: 4,
+                        paddingTop: 8,
+                        borderTop: '1px solid var(--border-color)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 6
+                    }}>
+                        <div style={{ fontSize: '0.73rem', fontWeight: 600, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                            <span>🔊 Test Spoken Distance Warnings:</span>
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                            <button
+                                className="btn btn-ghost"
+                                onClick={() => triggerSimulatedWarning('steps', 14)}
+                                style={{ fontSize: '0.73rem', padding: '4px 8px', borderRadius: 8, background: 'rgba(255, 107, 107, 0.1)', border: '1px solid rgba(255, 107, 107, 0.25)' }}
+                            >
+                                🪜 Stairs (14m)
+                            </button>
+                            <button
+                                className="btn btn-ghost"
+                                onClick={() => triggerSimulatedWarning('crossing', 22)}
+                                style={{ fontSize: '0.73rem', padding: '4px 8px', borderRadius: 8, background: 'rgba(255, 169, 77, 0.1)', border: '1px solid rgba(255, 169, 77, 0.25)' }}
+                            >
+                                🦓 Crossing (22m)
+                            </button>
+                            <button
+                                className="btn btn-ghost"
+                                onClick={() => triggerSimulatedWarning('traffic_signals', 30)}
+                                style={{ fontSize: '0.73rem', padding: '4px 8px', borderRadius: 8, background: 'rgba(255, 212, 59, 0.1)', border: '1px solid rgba(255, 212, 59, 0.25)' }}
+                            >
+                                🚦 Traffic Lights (30m)
+                            </button>
+                            <button
+                                className="btn btn-ghost"
+                                onClick={() => triggerSimulatedWarning('kerb', 8)}
+                                style={{ fontSize: '0.73rem', padding: '4px 8px', borderRadius: 8, background: 'rgba(255, 146, 43, 0.1)', border: '1px solid rgba(255, 146, 43, 0.25)' }}
+                            >
+                                ⚠️ Curb Drop (8m)
+                            </button>
+                            <button
+                                className="btn btn-ghost"
+                                onClick={() => triggerSimulatedWarning('obstacle', 5)}
+                                style={{ fontSize: '0.73rem', padding: '4px 8px', borderRadius: 8, background: 'rgba(240, 62, 62, 0.1)', border: '1px solid rgba(240, 62, 62, 0.25)' }}
+                            >
+                                🛑 Obstacle (5m)
+                            </button>
+                            <button
+                                className="btn btn-ghost"
+                                onClick={() => triggerSimulatedWarning('construction', 18)}
+                                style={{ fontSize: '0.73rem', padding: '4px 8px', borderRadius: 8, background: 'rgba(250, 82, 82, 0.1)', border: '1px solid rgba(250, 82, 82, 0.25)' }}
+                            >
+                                🚧 Construction (18m)
+                            </button>
+                        </div>
+                    </div>
+                </div>
 
                 {/* ── Main layout (stacked for mobile) ────────────────────*/}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -554,7 +1010,7 @@ const NavigationPage = () => {
                                     background: i === currentStep ? 'rgba(108,99,255,0.12)' : 'var(--bg-base)',
                                     border: `1px solid ${i === currentStep ? 'var(--color-primary)' : 'transparent'}`,
                                     cursor: 'pointer', transition: 'all 0.15s',
-                                }} onClick={() => { announceStep(s.instruction, i); setCurrentStep(i); }}>
+                                }} onClick={() => { announceStepWithDistance(s, i); setCurrentStep(i); }}>
                                     <div style={{ width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: i === currentStep ? 'var(--color-primary)' : 'var(--border-color)', color: i === currentStep ? '#fff' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.75rem', flexShrink: 0 }}>
                                         {i + 1}
                                     </div>
@@ -562,7 +1018,7 @@ const NavigationPage = () => {
                                         <div style={{ fontSize: '0.845rem', fontWeight: i === currentStep ? 600 : 400 }}>{s.instruction}</div>
                                     </div>
                                     <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', flexShrink: 0 }}>{formatDist(s.distance)}</div>
-                                    <button onClick={e => { e.stopPropagation(); announceStep(s.instruction, i); }}
+                                    <button onClick={e => { e.stopPropagation(); announceStepWithDistance(s, i); }}
                                         style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2 }}>
                                         <Volume2 size={13} />
                                     </button>

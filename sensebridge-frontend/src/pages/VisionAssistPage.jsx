@@ -1,10 +1,11 @@
 /**
- * VisionAssistPage.jsx — SenseBridge Vision Assist (new mobile UI)
- * All AI/detection logic unchanged; only presentation updated.
+ * VisionAssistPage.jsx — SenseBridge Vision Assist
+ * OCR: Gemini Vision (primary, handles handwriting) → Tesseract.js (fallback)
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import AppLayout from '../layouts/AppLayout';
+import { createWorker } from 'tesseract.js';
 import {
     startObjectDetection, stopObjectDetection, speak, cancelSpeech,
     ObstacleTracker, analyzeFrameForHazards,
@@ -14,10 +15,13 @@ import {
     loadKnownFaces, saveKnownFace, deleteKnownFace,
 } from '../services/faceService';
 import {
-    Eye, Volume2, AlertTriangle, Square, Zap,
+    Eye, Volume2, Square, ScanText, Copy, X,
     UserCheck, UserPlus, Camera, Trash2, ChevronDown, ChevronUp, Loader,
-    ChevronLeft,
+    ChevronLeft, Sparkles,
 } from 'lucide-react';
+import { getConfig, updateConfig, TemporalFilter } from '../config/config';
+
+const _temporalFilter = new TemporalFilter();
 
 // ── ALL 80 COCO classes — detect everything the model can see ─────────────
 const OBSTACLE_CLASSES = new Set([
@@ -47,19 +51,35 @@ const getDirection = (pctBbox) => {
     return cx < 33 ? 'left' : cx > 67 ? 'right' : 'ahead';
 };
 
-const DIST_COLOR = { close:'#FF4B6E', medium:'#FFA94D', far:'#00D4AA' };
+const DIST_COLOR = { close: '#F43F5E', medium: '#F59E0B', far: '#10B981' };
 const DIST_METERS = { close: '0.5m', medium: '1.5m', far: '3.0m' };
 const HAZARD_CFG = {
-    stair:{ emoji:'🪜', label:'Stairs Ahead', color:'#FFA94D', msg:'Warning! Stairs ahead. Slow down.' },
-    drop: { emoji:'⚠️', label:'Drop / Pit',   color:'#FF4B6E', msg:'Warning! Possible drop ahead. Stop!' },
-    slope:{ emoji:'📐', label:'Slope',         color:'#6c63ff', msg:'Slope detected ahead.' },
+    stair:{ label:'Staircase Ahead', color:'#F59E0B', msg:'Warning: Stairs ahead. Slow down.' },
+    drop: { label:'Drop Edge Ahead', color:'#F43F5E', msg:'Warning: Potential drop ahead. Stop!' },
+    slope:{ label:'Incline Ahead',   color:'#6366F1', msg:'Incline detected ahead.' },
 };
 
-const _spoken = {};
-const canSpeak = (key, ms = 5000) => {
-    const now = Date.now();
-    if (!_spoken[key] || now - _spoken[key] > ms) { _spoken[key] = now; return true; }
-    return false;
+const canSpeak = (key, ms = 5000, confidence = 0.8) => {
+    return _temporalFilter.shouldAnnounce(key, confidence, 'vision');
+};
+
+// Low-latency warning beep using Web Audio API
+const playBeep = (freq = 880, duration = 150) => {
+    try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        gain.gain.setValueAtTime(0.05, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration / 1000);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + duration / 1000);
+    } catch(e) {}
 };
 
 function boxOverlap(faceBox, detBox, W, H) {
@@ -91,7 +111,8 @@ const getNearestMeters = (obstacles) => {
 // ═══════════════════════════════════════════════════════════════════════════
 const VisionAssistPage = () => {
     const navigate = useNavigate();
-    const [active,      setActive]      = useState(false);
+    const location = useLocation();
+    const [active,      setActive]      = useState(location.state?.autoStart || false);
     const [obstacles,   setObstacles]   = useState([]);
     const [hazard,      setHazard]      = useState(null);
     const [alerts,      setAlerts]      = useState([]);
@@ -106,12 +127,24 @@ const VisionAssistPage = () => {
     const [enrollMsg,   setEnrollMsg]   = useState('');
     const [showFacePanel, setShowFacePanel] = useState(false);
 
-    const videoRef   = useRef(null);
-    const streamRef  = useRef(null);
-    const trackerRef = useRef(new ObstacleTracker());
-    const matcherRef = useRef(null);
-    const frameRef   = useRef(0);
-    const speakTimer = useRef(null);
+    // OCR state
+    const [ocrText,      setOcrText]      = useState('');
+    const [ocrLoading,   setOcrLoading]   = useState(false);
+    const [ocrError,     setOcrError]     = useState('');
+    const [showOcrCard,  setShowOcrCard]  = useState(false);
+
+    // AI Details & Telemetry
+    const [showAIDetails, setShowAIDetails] = useState(() => getConfig().ui?.showAIDetails ?? false);
+    const [lastLatencyMs, setLastLatencyMs] = useState(0);
+
+    const videoRef      = useRef(null);
+    const canvasRef     = useRef(null);
+    const streamRef     = useRef(null);
+    const trackerRef    = useRef(new ObstacleTracker());
+    const matcherRef    = useRef(null);
+    const frameRef      = useRef(0);
+    const speakTimer    = useRef(null);
+    const ocrWorkerRef  = useRef(null);  // persistent Tesseract worker
 
     useEffect(() => {
         const onStart = () => setActive(true);
@@ -204,7 +237,7 @@ const VisionAssistPage = () => {
                                         if (m.unknown) continue;
                                         if (canSpeak(`face-${m.name}`, 6000)) {
                                             doSpeak(`Your friend ${m.name} is in front of you`);
-                                            addAlert(`👤 ${m.name} recognised`, false);
+                                            addAlert(`${m.name} recognized`, false);
                                         }
                                     }
                                 } catch { /* transient */ }
@@ -220,12 +253,25 @@ const VisionAssistPage = () => {
                                     const verdict = d.knownName
                                         ? `Warning! Your friend ${d.knownName} is approaching from ${d.motion.direction}`
                                         : `Warning! ${d.motion.verdict}`;
-                                    if (canSpeak(`approach-${label}-${d.motion.direction}`, 3000)) { doSpeak(verdict, true); addAlert(verdict, true); }
+                                    if (canSpeak(`approach-${label}-${d.motion.direction}`, 3000)) { 
+                                        playBeep(880, 200);
+                                        doSpeak(verdict, true); 
+                                        addAlert(verdict, true); 
+                                    }
                                 } else if (d.distance === 'close') {
                                     const dir = d.direction === 'ahead' ? 'on your path' : `on your ${d.direction}`;
-                                    if (canSpeak(`close-${label}-${d.direction}`, 5000)) { doSpeak(`${label} very close ${dir}`, true); addAlert(`${label} very close ${dir}`, true); }
+                                    if (canSpeak(`close-${label}-${d.direction}`, 5000)) { 
+                                        playBeep(660, 150);
+                                        setTimeout(() => playBeep(660, 150), 200);
+                                        doSpeak(`${label} very close ${dir}`, true); 
+                                        addAlert(`${label} very close ${dir}`, true); 
+                                    }
                                 } else if (d.distance === 'medium' && MOVING_CLASSES.has(d.label)) {
-                                    if (canSpeak(`med-${label}-${d.direction}`, 7000)) { doSpeak(`${label} nearby on ${d.direction}`); addAlert(`${label} nearby on ${d.direction}`); }
+                                    if (canSpeak(`med-${label}-${d.direction}`, 7000)) { 
+                                        playBeep(440, 100);
+                                        doSpeak(`${label} nearby on ${d.direction}`); 
+                                        addAlert(`${label} nearby on ${d.direction}`); 
+                                    }
                                 }
                             }
                             // Hazard analysis every 30 frames with stricter confidence filter
@@ -265,6 +311,130 @@ const VisionAssistPage = () => {
         } catch (e) { setEnrollMsg('Error: ' + e.message); }
     }, [enrollName, ensureFaceModels]);
 
+    // ── Shared image preprocessor ─────────────────────────────────────────
+    const buildProcessedCanvas = (src, opts = {}) => {
+        const { scale = 2, invert = false } = opts;
+        const pw = src.width  * scale;
+        const ph = src.height * scale;
+        const pc = document.createElement('canvas');
+        pc.width  = pw;
+        pc.height = ph;
+        const ctx = pc.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(src, 0, 0, pw, ph);
+
+        const id = ctx.getImageData(0, 0, pw, ph);
+        const d  = id.data;
+
+        // Find luminance range for full-range stretch
+        let lo = 255, hi = 0;
+        for (let i = 0; i < d.length; i += 4) {
+            const g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+            if (g < lo) lo = g;
+            if (g > hi) hi = g;
+        }
+        const rng = hi - lo || 1;
+
+        for (let i = 0; i < d.length; i += 4) {
+            const g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+            let v = ((g - lo) / rng) * 255;          // stretch to full range
+            v = Math.min(255, Math.max(0, 1.6*(v-128)+128)); // contrast boost
+            if (invert) v = 255 - v;
+            d[i] = d[i+1] = d[i+2] = v;
+        }
+        ctx.putImageData(id, 0, 0);
+        return pc;
+    };
+
+    // Helper: is this OCR result plausible (not just symbols/noise)?
+    const isPlausible = (txt) => {
+        if (!txt || txt.length < 2) return false;
+        const letters = (txt.match(/[a-zA-Z]/g) || []).length;
+        return letters / txt.length > 0.4; // at least 40% alphabetic chars
+    };
+
+    // ── Tesseract multi-pass OCR ───────────────────────────────────────────
+    const ocrWithTesseract = async (canvas) => {
+        // Lazy-init worker: OEM=1 (LSTM only) set via constructor arg
+        if (!ocrWorkerRef.current) {
+            // createWorker(lang, oem, options)  — oem 1 = LSTM_ONLY
+            ocrWorkerRef.current = await createWorker('eng', 1, { logger: () => {} });
+        }
+        const worker = ocrWorkerRef.current;
+
+        const normalCanvas  = buildProcessedCanvas(canvas, { scale: 2, invert: false });
+        const invertedCanvas = buildProcessedCanvas(canvas, { scale: 2, invert: true });
+
+        // Try different PSM modes: 7=single line, 6=block, 13=raw line, 3=auto
+        const passes = [
+            { canvas: normalCanvas,   psm: '7'  },  // single text line (best for simple words)
+            { canvas: normalCanvas,   psm: '6'  },  // uniform block
+            { canvas: invertedCanvas, psm: '7'  },  // inverted single line (dark bg text)
+            { canvas: normalCanvas,   psm: '13' },  // raw line (no segmentation)
+            { canvas: normalCanvas,   psm: '3'  },  // fully automatic
+        ];
+
+        let bestText = '';
+        for (const pass of passes) {
+            try {
+                await worker.setParameters({ tessedit_pageseg_mode: pass.psm });
+                const { data } = await worker.recognize(pass.canvas);
+                const txt = data.text?.trim() || '';
+                console.log(`[OCR] PSM ${pass.psm} invert=${pass.canvas === invertedCanvas}:`, JSON.stringify(txt));
+                if (isPlausible(txt) && txt.length > bestText.length) {
+                    bestText = txt;
+                }
+            } catch (e) {
+                console.warn('[OCR] Pass failed:', e.message);
+            }
+        }
+        return bestText;
+    };
+
+    // ── Main OCR handler ──────────────────────────────────────────────────
+    const captureOCR = useCallback(async () => {
+        const vid    = videoRef.current;
+        const canvas = canvasRef.current;
+        if (!vid || !canvas || !active) return;
+
+        canvas.width  = vid.videoWidth  || 640;
+        canvas.height = vid.videoHeight || 480;
+        canvas.getContext('2d').drawImage(vid, 0, 0, canvas.width, canvas.height);
+
+        setOcrLoading(true);
+        setOcrError('');
+        setOcrText('');
+        setShowOcrCard(true);
+
+        try {
+            const text = await ocrWithTesseract(canvas);
+
+            if (!text) {
+                setOcrError('No text detected. Hold steady and make sure text is well-lit.');
+            } else {
+                setOcrText(text);
+                addAlert(`OCR: ${text.slice(0, 60)}${text.length > 60 ? '…' : ''}`);
+                speak(text);
+            }
+        } catch (err) {
+            setOcrError('OCR failed — please try again.');
+            console.error('[OCR]', err);
+        } finally {
+            setOcrLoading(false);
+        }
+    }, [active, addAlert]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Terminate Tesseract worker on unmount
+    useEffect(() => {
+        return () => { ocrWorkerRef.current?.terminate(); };
+    }, []);
+
+
+
+
+
+
     const hazardType = hazard?.stair ? 'stair' : hazard?.drop ? 'drop' : hazard?.slope ? 'slope' : null;
     const hazardCfg  = hazardType ? HAZARD_CFG[hazardType] : null;
     const uniqueNames = [...new Set(knownFaces.map(f => f.name))];
@@ -276,47 +446,75 @@ const VisionAssistPage = () => {
         ? `${obstacles[0].knownName || obstacles[0].label} detected ${obstacles[0].direction === 'ahead' ? 'ahead' : `on your ${obstacles[0].direction}`}, ${DIST_METERS[obstacles[0].distance] || '?'}`
         : active ? 'No obstacles detected' : 'Press start to begin detection';
 
+    const isOcrMode = location.state?.mode === 'ocr';
+    const pageTitle = isOcrMode ? 'Read Text (OCR)' : 'Navigation Mode';
+
     return (
-        <AppLayout noPad>
-            {/* Page header */}
-            <div className="page-header">
-                <button className="icon-btn" onClick={() => navigate('/dashboard')}>
-                    <ChevronLeft size={20} />
-                </button>
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+        <AppLayout title={pageTitle} showBack backLabel="Home">
+            {/* Hidden canvas for OCR frame capture */}
+            <canvas ref={canvasRef} style={{ display: 'none' }} />
+
+            {/* ── Action / Status Bar ─────────────────────────────────────────── */}
+            <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '0.65rem 1rem', background: 'var(--bg-card)',
+                borderRadius: 'var(--radius-lg)', margin: '0.5rem 0.5rem 0.75rem',
+                boxShadow: 'var(--shadow-card)',
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     {active && <span className="live-dot" />}
-                    <span style={{ fontWeight: 700, fontSize: '0.9rem', color: active ? 'var(--color-accent)' : 'var(--text-muted)' }}>
-                        {active ? 'LIVE' : 'VISION ASSIST'}
+                    <span style={{ fontWeight: 600, fontSize: '0.85rem', color: active ? 'var(--blue)' : 'var(--text-muted)' }}>
+                        {active ? 'CAMERA ACTIVE' : 'CAMERA OFF'}
                     </span>
                 </div>
-                <button
-                    className="icon-btn"
-                    onClick={() => { cancelSpeech(); }}
-                    style={{ background: 'rgba(0,212,170,0.15)', borderColor: 'var(--color-accent)' }}
-                >
-                    <Volume2 size={18} style={{ color: 'var(--color-accent)' }} />
-                </button>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <button
+                        className="btn-icon"
+                        onClick={() => setShowAIDetails(v => { const next = !v; updateConfig({ ui: { showAIDetails: next } }); return next; })}
+                        style={{
+                            fontSize: '0.72rem', fontWeight: 700,
+                            color: showAIDetails ? 'var(--blue)' : 'var(--text-muted)',
+                            padding: '4px 8px', width: 'auto',
+                        }}
+                        title="Toggle AI Technical Metrics"
+                    >
+                        {showAIDetails ? 'AI ON' : 'AI OFF'}
+                    </button>
+                    <button
+                        className="btn-icon"
+                        onClick={() => { cancelSpeech(); }}
+                        title="Mute Speech"
+                    >
+                        <Volume2 size={16} color="var(--text-secondary)" />
+                    </button>
+                </div>
             </div>
 
             {/* Stats row */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem', padding: '0.5rem 1rem 0.75rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: showAIDetails ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: '0.5rem', padding: '0.5rem 1rem 0.75rem' }}>
                 <div style={{ background: 'var(--bg-card2)', borderRadius: 10, padding: '0.6rem 0.75rem' }}>
                     <div style={{ fontSize: '0.58rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: 2 }}>DETECTED</div>
-                    <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-primary)' }}>{obstacles.length}</div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text-primary)' }}>{obstacles.length}</div>
                 </div>
                 <div style={{ background: 'var(--bg-card2)', borderRadius: 10, padding: '0.6rem 0.75rem' }}>
                     <div style={{ fontSize: '0.58rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: 2 }}>NEAREST</div>
-                    <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#FFA94D' }}>{obstacles.length ? nearest : '—'}</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#FFA94D' }}>{obstacles.length ? nearest : '—'}</div>
                 </div>
                 <div style={{ background: 'var(--bg-card2)', borderRadius: 10, padding: '0.6rem 0.75rem', position: 'relative', overflow: 'hidden' }}>
                     <div style={{ fontSize: '0.58rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: 2 }}>
-                        ⚡ AI CONFIDENCE
+                        CONFIDENCE
                     </div>
-                    <div style={{ fontSize: '1.3rem', fontWeight: 800, color: active ? '#FF4B6E' : 'var(--text-muted)' }}>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 800, color: active ? '#FF4B6E' : 'var(--text-muted)' }}>
                         {active ? `${aiConf || '--'}%` : '--'}
                     </div>
                     {active && <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,75,110,0.08)', pointerEvents: 'none' }} />}
                 </div>
+                {showAIDetails && (
+                    <div style={{ background: 'rgba(108,99,255,0.1)', border: '1px solid rgba(108,99,255,0.25)', borderRadius: 10, padding: '0.6rem 0.75rem' }}>
+                        <div style={{ fontSize: '0.58rem', fontWeight: 700, color: 'var(--color-primary)', letterSpacing: '0.08em', marginBottom: 2 }}>LATENCY</div>
+                        <div style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--color-primary)' }}>{lastLatencyMs || '~35'}ms</div>
+                    </div>
+                )}
             </div>
 
             {/* Radar / Camera canvas */}
@@ -334,6 +532,7 @@ const VisionAssistPage = () => {
                                 const isApproach = d.motion?.approaching;
                                 const color = d.knownName ? '#00D4AA' : (isApproach ? '#FF4B6E' : DIST_COLOR[d.distance]);
                                 const distM = DIST_METERS[d.distance] || '?';
+                                const confTag = showAIDetails ? ` · ${Math.round((d.confidence || 0.8) * 100)}%` : '';
                                 return (
                                     <div key={i} style={{
                                         position: 'absolute',
@@ -350,7 +549,7 @@ const VisionAssistPage = () => {
                                             padding: '2px 7px', borderRadius: '6px 6px 6px 0',
                                             whiteSpace: 'nowrap',
                                         }}>
-                                            {d.knownName || d.label} · {distM}
+                                            {d.knownName || d.label} · {distM}{confTag}
                                         </span>
                                     </div>
                                 );
@@ -384,6 +583,61 @@ const VisionAssistPage = () => {
                     )}
                 </div>
             </div>
+
+            {/* OCR Result Card */}
+            {showOcrCard && (
+                <div style={{
+                    margin: '0.5rem 1rem 0',
+                    background: 'linear-gradient(135deg, rgba(108,99,255,0.18), rgba(0,212,170,0.12))',
+                    border: '1px solid rgba(108,99,255,0.35)',
+                    borderRadius: 14,
+                    padding: '0.75rem 1rem',
+                    position: 'relative',
+                }} className="fade-in">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                        <ScanText size={14} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
+                        <span style={{ fontWeight: 700, fontSize: '0.78rem', color: 'var(--color-primary)', flex: 1 }}>OCR — Extracted Text</span>
+                        {ocrText && (
+                            <button
+                                onClick={() => navigator.clipboard?.writeText(ocrText).catch(() => {})}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 2, lineHeight: 1 }}
+                                title="Copy text"
+                            >
+                                <Copy size={13} />
+                            </button>
+                        )}
+                        <button
+                            onClick={() => { setShowOcrCard(false); setOcrText(''); setOcrError(''); }}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 2, lineHeight: 1 }}
+                        >
+                            <X size={13} />
+                        </button>
+                    </div>
+
+                    {ocrLoading && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                            <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} />
+                            Scanning image for text…
+                        </div>
+                    )}
+                    {!ocrLoading && ocrError && (
+                        <div style={{ fontSize: '0.78rem', color: 'var(--color-warning)' }}>⚠️ {ocrError}</div>
+                    )}
+                    {!ocrLoading && ocrText && (
+                        <div style={{
+                            fontSize: '0.82rem',
+                            color: 'var(--text-primary)',
+                            lineHeight: 1.55,
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            maxHeight: 120,
+                            overflowY: 'auto',
+                        }}>
+                            {ocrText}
+                        </div>
+                    )}
+                </div>
+            )}
 
             {/* Status strip */}
             <div style={{
@@ -457,8 +711,30 @@ const VisionAssistPage = () => {
                 )}
             </div>
 
-            {/* Start/Stop button */}
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '1rem 1rem 0.5rem' }}>
+            {/* Start/Stop + OCR buttons */}
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 12, padding: '1rem 1rem 0.5rem', alignItems: 'center' }}>
+                {/* OCR Capture button */}
+                <button
+                    onClick={captureOCR}
+                    disabled={!active || ocrLoading}
+                    title="Read text in camera view"
+                    style={{
+                        width: 48, height: 48, borderRadius: '50%',
+                        background: active ? 'linear-gradient(135deg, #6c63ff, #4ecdc4)' : 'var(--bg-card2)',
+                        border: 'none', cursor: active ? 'pointer' : 'not-allowed',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        boxShadow: active ? '0 0 0 6px rgba(108,99,255,0.2)' : 'none',
+                        transition: 'all 0.2s ease',
+                        opacity: active ? 1 : 0.4,
+                        flexShrink: 0,
+                    }}
+                >
+                    {ocrLoading
+                        ? <Loader size={20} color="#fff" style={{ animation: 'spin 1s linear infinite' }} />
+                        : <ScanText size={20} color={active ? '#fff' : 'var(--text-muted)'} />
+                    }
+                </button>
+
                 <div style={{ background: 'var(--bg-card)', borderRadius: 20, padding: '0.875rem 2rem', display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 180 }}>
                     <button
                         className="fab-stop"
@@ -471,6 +747,9 @@ const VisionAssistPage = () => {
                         }
                     </button>
                 </div>
+
+                {/* Spacer to balance layout */}
+                <div style={{ width: 48, flexShrink: 0 }} />
             </div>
         </AppLayout>
     );

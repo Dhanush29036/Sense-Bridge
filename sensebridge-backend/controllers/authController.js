@@ -28,7 +28,12 @@ const sendTokenResponse = (res, user, statusCode) => {
 // ─── @access Public
 const register = async (req, res, next) => {
     try {
-        const { name, email, password, role } = req.body;
+        const { name, password, role } = req.body;
+        const email = (req.body.email || '').trim().toLowerCase();
+
+        if (!email || !password || !name) {
+            return res.status(400).json({ success: false, message: 'All fields are required.' });
+        }
 
         // Check duplicate email
         const existing = await User.findOne({ email });
@@ -36,7 +41,7 @@ const register = async (req, res, next) => {
             return res.status(409).json({ success: false, message: 'Email already registered.' });
         }
 
-        const user = await User.create({ name, email, password, role });
+        const user = await User.create({ name, email, password, role: role || 'mixed' });
 
         // Seed default preferences for the new user
         await Preference.create({ user: user._id });
@@ -51,7 +56,12 @@ const register = async (req, res, next) => {
 // ─── @access Public
 const login = async (req, res, next) => {
     try {
-        const { email, password } = req.body;
+        const email = (req.body.email || '').trim().toLowerCase();
+        const password = req.body.password;
+
+        if (!email || !password) {
+            return res.status(400).json({ success: false, message: 'Email and password are required.' });
+        }
 
         // Explicitly select password (select: false on schema)
         const user = await User.findOne({ email }).select('+password');

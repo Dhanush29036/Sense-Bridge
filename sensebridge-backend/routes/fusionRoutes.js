@@ -33,13 +33,13 @@ router.post('/fuse', auth, async (req, res) => {
         try {
             const prompt = buildGeminiPrompt(ctx);
             const gemRes = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`,
+                `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${GEMINI_KEY}`,
                 {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         contents: [{ parts: [{ text: prompt }] }],
-                        generationConfig: { temperature: 0.3, maxOutputTokens: 200 },
+                        generationConfig: { temperature: 0.3, maxOutputTokens: 1024 },
                     }),
                     signal: AbortSignal.timeout(4000),
                 }

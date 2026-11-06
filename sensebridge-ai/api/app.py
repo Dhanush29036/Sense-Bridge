@@ -4,11 +4,13 @@ Flask Integration Layer — Main Application
 Exposes all AI modules as REST endpoints for the React/Capacitor frontend.
 
 Architecture:
-    POST /api/detect          ← Send base64 or multipart frame → get detections
-    POST /api/ocr             ← Send frame → get text regions
-    POST /api/stt/transcribe  ← Send WAV bytes → get transcript
-    POST /api/gesture/predict ← Send landmark sequence → get gesture label
-    GET  /health              ← Health check
+    POST /api/detect              ← Send base64 or multipart frame → get detections
+    POST /api/ocr                 ← Send frame → get text regions
+    POST /api/stt/transcribe      ← Send WAV bytes → get transcript
+    POST /api/gesture/predict     ← Send landmark sequence → get gesture label
+    POST /api/fuse                ← Multimodal fusion endpoint
+    POST /api/experiments/*       ← Research/experiment logging endpoints
+    GET  /health                  ← Health check
 
 Deployment options:
     1. On-device via Termux (Android):
@@ -32,11 +34,12 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-from api.routes.detection import detection_bp
-from api.routes.ocr       import ocr_bp
-from api.routes.stt       import stt_bp
-from api.routes.gesture   import gesture_bp
-from api.routes.fusion    import fusion_bp
+from api.routes.detection   import detection_bp
+from api.routes.ocr         import ocr_bp
+from api.routes.stt         import stt_bp
+from api.routes.gesture     import gesture_bp
+from api.routes.fusion      import fusion_bp
+from api.routes.experiments import experiments_bp
 
 
 def create_app() -> Flask:
@@ -48,6 +51,7 @@ def create_app() -> Flask:
         r"/api/*": {
             "origins": [
                 "http://localhost:5173",
+                "http://localhost:5174",
                 "http://localhost:3000",
                 "capacitor://localhost",
                 "http://localhost",
@@ -65,19 +69,23 @@ def create_app() -> Flask:
     limiter.limit("60/minute")(detection_bp)
 
     # ─── Blueprints ───────────────────────────────────────────────────────────
-    app.register_blueprint(detection_bp, url_prefix="/api")
-    app.register_blueprint(ocr_bp,       url_prefix="/api")
-    app.register_blueprint(stt_bp,       url_prefix="/api")
-    app.register_blueprint(gesture_bp,   url_prefix="/api")
-    app.register_blueprint(fusion_bp,    url_prefix="/api")
+    app.register_blueprint(detection_bp,   url_prefix="/api")
+    app.register_blueprint(ocr_bp,         url_prefix="/api")
+    app.register_blueprint(stt_bp,         url_prefix="/api")
+    app.register_blueprint(gesture_bp,     url_prefix="/api")
+    app.register_blueprint(fusion_bp,      url_prefix="/api")
+    app.register_blueprint(experiments_bp, url_prefix="/api")
 
     # ─── Health check ─────────────────────────────────────────────────────────
     @app.get("/health")
     def health():
+        from modules.performance_monitor import get_monitor
+        monitor_summary = get_monitor().get_summary()
         return jsonify({
-            "status": "ok",
-            "service": "SenseBridge AI",
+            "status":    "ok",
+            "service":   "SenseBridge AI",
             "timestamp": time.time(),
+            "inference_stats": monitor_summary,
         })
 
     # ─── Global error handlers ────────────────────────────────────────────────
@@ -93,6 +101,10 @@ def create_app() -> Flask:
     def server_error(e):
         return jsonify({"success": False, "message": "Internal server error"}), 500
 
+    @app.errorhandler(404)
+    def not_found(e):
+        return jsonify({"success": False, "message": "Endpoint not found"}), 404
+
     return app
 
 
@@ -103,4 +115,5 @@ if __name__ == "__main__":
     port  = int(os.getenv("FLASK_PORT", "8000"))
     debug = os.getenv("FLASK_DEBUG", "False").lower() == "true"
     print(f"SenseBridge AI server on {host}:{port}")
+    print(f"Research endpoints: POST /api/experiments/sessions, GET /api/experiments/dashboard")
     app.run(host=host, port=port, debug=debug, threaded=True)

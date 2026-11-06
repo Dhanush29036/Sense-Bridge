@@ -54,18 +54,31 @@ const originMatchers = allowedOrigins.map((origin) => {
     return origin;
 });
 
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    next();
+});
+
 app.use(
     cors({
         origin: (origin, callback) => {
-            // Allow requests with no origin (mobile apps, Postman, server-to-server)
-            const isAllowed = !origin || originMatchers.some((matcher) =>
-                matcher instanceof RegExp ? matcher.test(origin) : matcher === origin
-            );
+            // Allow requests with no origin (mobile apps, Postman, server-to-server) or localhost/capacitor/LAN origins
+            const isAllowed =
+                !origin ||
+                allowedOrigins.includes(origin) ||
+                origin.startsWith('capacitor://') ||
+                origin.includes('localhost') ||
+                origin.startsWith('http://192.168.') ||
+                origin.startsWith('http://10.') ||
+                originMatchers.some((matcher) =>
+                    matcher instanceof RegExp ? matcher.test(origin) : matcher === origin
+                );
 
             if (isAllowed) {
                 callback(null, true);
             } else {
-                callback(new Error(`CORS: Origin '${origin}' not allowed.`));
+                console.warn(`CORS: Request denied for origin: ${origin}`);
+                callback(null, false);
             }
         },
         credentials: true,
@@ -104,6 +117,45 @@ app.get('/metrics', async (req, res) => {
         res.status(500).end(err.message);
     }
 });
+
+// ─── Forwarding to Python AI microservice (Flask :8000) ───────────────────────
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+const proxyToPythonAI = async (req, res) => {
+    try {
+        const targetUrl = `${AI_SERVICE_URL}${req.originalUrl}`;
+        const headers = { ...req.headers };
+        delete headers.host;
+        delete headers['content-length'];
+
+        const fetchOptions = {
+            method: req.method,
+            headers: {
+                ...headers,
+                'content-type': req.headers['content-type'] || 'application/json',
+            },
+        };
+
+        if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
+            fetchOptions.body = typeof req.body === 'object' ? JSON.stringify(req.body) : req.body;
+        }
+
+        const aiRes = await fetch(targetUrl, fetchOptions);
+        const contentType = aiRes.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+            const data = await aiRes.json();
+            return res.status(aiRes.status).json(data);
+        }
+        const text = await aiRes.text();
+        return res.status(aiRes.status).send(text);
+    } catch (err) {
+        return res.status(503).json({
+            success: false,
+            message: `AI service unavailable: ${err.message}`,
+        });
+    }
+};
+
+app.use(['/api/detect', '/api/fuse', '/api/ocr', '/api/stt', '/api/gesture', '/api/experiments'], proxyToPythonAI);
 
 // ─── API Routes ────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);

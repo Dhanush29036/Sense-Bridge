@@ -8,7 +8,8 @@
  * TTS              : Speak Queue with priority + voice selection
  */
 
-import { apiUrl, logService } from './api';
+import { logService } from './api';
+import { getBackendBaseURL, getAIBaseURL } from './networkConfig';
 import * as tf from '@tensorflow/tfjs';
 import '@tensorflow/tfjs-backend-webgl';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
@@ -87,7 +88,7 @@ export class ObstacleTracker {
             moving.forEach((d, i) => {
                 if (usedDet.has(i) || d.label !== track.label) return;
                 const score = iou(
-                    this._pctToAbsBbox(track.history.at(-1), W, H),
+                    this._pctToAbsBbox(track.history[track.history.length - 1], W, H),
                     d.bbox
                 );
                 if (score > bestIou) { bestIou = score; bestIdx = i; }
@@ -141,7 +142,7 @@ export class ObstacleTracker {
 
         for (const [, track] of this.tracks) {
             if (track.label !== det.label || track.history.length < 3) continue;
-            const last = track.history.at(-1);
+            const last = track.history[track.history.length - 1];
             const d    = Math.hypot(cx - last.cx, cy - last.cy);
             if (d < bestDist) { bestDist = d; bestTrack = track; }
         }
@@ -150,7 +151,7 @@ export class ObstacleTracker {
 
         const hist   = bestTrack.history;
         const oldest = hist[0];
-        const latest = hist.at(-1);
+        const latest = hist[hist.length - 1];
         const dt     = (latest.t - oldest.t) / 1000;   // seconds
         if (dt < 0.1) return null;
 
@@ -303,16 +304,86 @@ export function analyzeFrameForHazards(videoElement) {
 }
 
 
+// Helper to grab frame and run server YOLOv8 detection
+let _serverDetectBusy = false;
+let _offscreenCanvas = null;
+let _offscreenCtx = null;
+
+async function runServerDetection(videoElement) {
+    if (_serverDetectBusy || !videoElement || videoElement.readyState < 2) return null;
+    _serverDetectBusy = true;
+    try {
+        const W = videoElement.videoWidth || 640;
+        const H = videoElement.videoHeight || 480;
+        if (!_offscreenCanvas) {
+            _offscreenCanvas = document.createElement('canvas');
+        }
+        _offscreenCanvas.width = 320;
+        _offscreenCanvas.height = 240;
+        if (!_offscreenCtx) _offscreenCtx = _offscreenCanvas.getContext('2d');
+        _offscreenCtx.drawImage(videoElement, 0, 0, 320, 240);
+        const dataUrl = _offscreenCanvas.toDataURL('image/jpeg', 0.6);
+
+        const aiBase = getAIBaseURL();
+        const res = await fetch(`${aiBase}/api/detect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: dataUrl }),
+            signal: AbortSignal.timeout(2500),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (!data.success || !Array.isArray(data.detections)) return null;
+
+        const scaleX = W / 320;
+        const scaleY = H / 240;
+        return data.detections.map(d => {
+            const bbox = d.bbox || [0, 0, 50, 50]; // [x1, y1, x2, y2]
+            const x = bbox[0] * scaleX;
+            const y = bbox[1] * scaleY;
+            const w = (bbox[2] - bbox[0]) * scaleX;
+            const h = (bbox[3] - bbox[1]) * scaleY;
+            return {
+                label: d.label,
+                confidence: d.confidence,
+                bbox: [x, y, w, h],
+                pctBbox: [
+                    (x / W) * 100,
+                    (y / H) * 100,
+                    (w / W) * 100,
+                    (h / H) * 100,
+                ],
+                distance_m: d.distance_m,
+                severity: d.severity,
+            };
+        });
+    } catch {
+        return null;
+    } finally {
+        _serverDetectBusy = false;
+    }
+}
+
 export const startObjectDetection = async (videoElement, onDetection) => {
     console.info('[Vision] Starting object detection…');
     _visionActive = true;
 
     if (!_visionModel) {
-        await tf.setBackend('webgl');
-        await tf.ready();
-        // mobilenet_v2 is significantly more accurate than lite_mobilenet_v2
-        _visionModel = await cocoSsd.load({ base: 'mobilenet_v2' });
-        console.info('[Vision] Model loaded (mobilenet_v2 + WebGL)');
+        try {
+            await tf.setBackend('webgl').catch(() => tf.setBackend('cpu'));
+            await tf.ready();
+            _visionModel = await cocoSsd.load({ base: 'mobilenet_v2' });
+            console.info('[Vision] Model loaded (mobilenet_v2 + WebGL)');
+        } catch (err1) {
+            console.warn('[Vision] mobilenet_v2 load failed, attempting lite_mobilenet_v2:', err1?.message);
+            try {
+                _visionModel = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+                console.info('[Vision] Model loaded (lite_mobilenet_v2 fallback)');
+            } catch (err2) {
+                console.warn('[Vision] Client-side COCO-SSD unavailable. Using backend YOLOv8 (/api/detect):', err2?.message);
+                _visionModel = null;
+            }
+        }
     }
 
     let lastLogTime = 0;
@@ -330,40 +401,57 @@ export const startObjectDetection = async (videoElement, onDetection) => {
         lastDetectionTime = now;
 
         if (videoElement.readyState >= 2) {
-            // Run inference inside tf.tidy to avoid memory leaks
-            const raw = await _visionModel.detect(videoElement, 40, 0.30);
-            const filtered = nms(raw);
+            let detections = null;
 
-            const W = videoElement.videoWidth || 640;
-            const H = videoElement.videoHeight || 480;
+            if (_visionModel) {
+                try {
+                    const raw = await _visionModel.detect(videoElement, 40, 0.30);
+                    const filtered = nms(raw);
 
-            const detections = filtered.map(p => ({
-                label: p.class,
-                confidence: +(p.score.toFixed(3)),
-                bbox: p.bbox,
-                pctBbox: [
-                    (p.bbox[0] / W) * 100,
-                    (p.bbox[1] / H) * 100,
-                    (p.bbox[2] / W) * 100,
-                    (p.bbox[3] / H) * 100,
-                ],
-            }));
+                    const W = videoElement.videoWidth || 640;
+                    const H = videoElement.videoHeight || 480;
 
-            onDetection?.({ detections, timestamp: now, latency: +(performance.now() - now).toFixed(1) });
+                    detections = filtered.map(p => ({
+                        label: p.class,
+                        confidence: +(p.score.toFixed(3)),
+                        bbox: p.bbox,
+                        pctBbox: [
+                            (p.bbox[0] / W) * 100,
+                            (p.bbox[1] / H) * 100,
+                            (p.bbox[2] / W) * 100,
+                            (p.bbox[3] / H) * 100,
+                        ],
+                    }));
+                } catch (e) {
+                    console.warn('[Vision] Local frame detection error, falling back to server:', e?.message);
+                    detections = null;
+                }
+            }
 
-            const highConf = detections.filter(d => d.confidence > 0.55);
-            if (highConf.length && now - lastLogTime > 4000) {
-                lastLogTime = now;
-                logService.create({
-                    eventType: 'object_detection',
-                    message: `Detected: ${highConf.map(d => d.label).join(', ')}`,
-                    severity: 'info',
-                    confidence: Math.max(...highConf.map(d => d.confidence)),
-                    metadata: { detections, model: 'coco-ssd-mobilenetv2' },
-                }).catch(() => { });
+            // Fallback to server YOLOv8 if client model unavailable or failed
+            if (!detections) {
+                detections = await runServerDetection(videoElement);
+            }
+
+            if (detections && _visionActive) {
+                onDetection?.({ detections, timestamp: now, latency: +(performance.now() - now).toFixed(1) });
+
+                const highConf = detections.filter(d => d.confidence > 0.55);
+                if (highConf.length && now - lastLogTime > 4000) {
+                    lastLogTime = now;
+                    logService.create({
+                        eventType: 'object_detection',
+                        message: `Detected: ${highConf.map(d => d.label).join(', ')}`,
+                        severity: 'info',
+                        confidence: Math.max(...highConf.map(d => d.confidence)),
+                        metadata: { detections, model: _visionModel ? 'coco-ssd-mobilenetv2' : 'sensebridge-yolov8-backend' },
+                    }).catch(() => { });
+                }
             }
         }
-        _visionRafId = requestAnimationFrame(loop);
+        if (_visionActive) {
+            _visionRafId = requestAnimationFrame(loop);
+        }
     };
 
     loop();
@@ -491,76 +579,559 @@ export const stopSpeechRecognition = () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TEXT-TO-SPEECH — Priority queue with voice pre-selection
+// TEXT-TO-SPEECH — Android WebView resilient TTS with settings check
 // ═══════════════════════════════════════════════════════════════════════════
 
 let _ttsVoice = null;
 
 function getBestVoice(lang = 'en-US') {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return null;
     const voices = window.speechSynthesis.getVoices();
-    // Prefer local/enhanced voices
+    if (!voices || !voices.length) return null;
+    const prefix = lang.split('-')[0].toLowerCase();
     return (
-        voices.find(v => v.lang === lang && !v.localService === false) ||
-        voices.find(v => v.lang.startsWith(lang.split('-')[0])) ||
+        voices.find(v => v.lang.toLowerCase() === lang.toLowerCase() && v.localService) ||
+        voices.find(v => v.lang.toLowerCase() === lang.toLowerCase()) ||
+        voices.find(v => v.lang.toLowerCase().startsWith(prefix)) ||
         voices[0] ||
         null
     );
 }
 
-export const speak = (text, { lang = 'en-US', rate = 1.05, pitch = 1, priority = 'normal' } = {}) => {
-    if (!text || !window.speechSynthesis) return;
-    if (priority === 'high') window.speechSynthesis.cancel();
+export const speak = (text, { lang = 'en-US', rate = 1.0, pitch = 1, priority = 'normal' } = {}) => {
+    if (!text || typeof window === 'undefined' || !window.speechSynthesis) return;
 
-    if (!_ttsVoice) _ttsVoice = getBestVoice(lang);
-
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.lang = lang;
-    utt.rate = rate;
-    utt.pitch = pitch;
-    if (_ttsVoice) utt.voice = _ttsVoice;
-    window.speechSynthesis.speak(utt);
-};
-
-export const cancelSpeech = () => window.speechSynthesis?.cancel();
-
-// Pre-load voices when they become available
-if (typeof window !== 'undefined') {
-    window.speechSynthesis?.addEventListener('voiceschanged', () => {
-        _ttsVoice = getBestVoice('en-US');
-    });
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SENTENCE FORMATION — Backend API (Gemini) with instant fallback
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Converts an array of gesture words into a grammatically correct sentence.
- * Calls the backend /api/ai/format-sentence (which calls Gemini if API key configured).
- */
-export const formatGestureSentence = async (words, token) => {
-    if (!words?.length) return '';
+    // Check user preference for voice feedback
     try {
-        const res = await fetch(apiUrl('/api/ai/format-sentence'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-            body: JSON.stringify({ words }),
-        });
-        if (!res.ok) throw new Error(`API ${res.status}`);
-        const data = await res.json();
-        return data.sentence || words.join(' ');
-    } catch {
-        // Instant client-side fallback — no loading spinner needed
-        return buildClientSentence(words);
+        const cfg = getConfig();
+        if (cfg.ui?.voiceFeedback === false && priority !== 'high') {
+            return;
+        }
+    } catch {}
+
+    try {
+        // Android Chrome WebView fix: unpause engine if paused or stalled
+        if (window.speechSynthesis.paused) {
+            window.speechSynthesis.resume();
+        }
+        if (priority === 'high' || window.speechSynthesis.speaking) {
+            window.speechSynthesis.cancel();
+        }
+
+        if (!_ttsVoice) {
+            _ttsVoice = getBestVoice(lang);
+        }
+
+        const utt = new SpeechSynthesisUtterance(text);
+        utt.lang = lang;
+        utt.rate = Math.max(0.7, Math.min(1.8, rate));
+        utt.pitch = pitch;
+        if (_ttsVoice) {
+            utt.voice = _ttsVoice;
+        }
+
+        utt.onerror = (e) => {
+            console.warn('[TTS] Synthesis notice:', e.error);
+            try { window.speechSynthesis.resume(); } catch {}
+        };
+
+        window.speechSynthesis.speak(utt);
+    } catch (err) {
+        console.error('[TTS] speak failed:', err);
     }
 };
 
-function buildClientSentence(words) {
-    if (!words.length) return '';
-    if (words.length === 1) return words[0] + '.';
-    // Capitalise first word, ensure full stop
-    const sentence = words.map((w, i) => i === 0 ? w : w.toLowerCase()).join(' ');
-    return sentence.endsWith('.') ? sentence : sentence + '.';
+export const cancelSpeech = () => {
+    try {
+        window.speechSynthesis?.cancel();
+    } catch {}
+};
+
+// Pre-load voices when they become available
+if (typeof window !== 'undefined' && window.speechSynthesis) {
+    try {
+        window.speechSynthesis.onvoiceschanged = () => {
+            _ttsVoice = getBestVoice('en-US');
+        };
+    } catch {}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SENTENCE FORMATION — Backend API (Gemini) + Direct Gemini + Smart ASL Engine
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Converts an array of gesture words into a natural, grammatically correct sentence.
+ * 1. Tries backend /api/ai/format-sentence
+ * 2. Tries direct Gemini API call if backend is offline and client has internet
+ * 3. Falls back to smart rule-based ASL-to-English grammar synthesis engine
+ */
+/**
+ * Intelligent ASL-to-English predictive intent engine.
+ * Takes recognized gesture tokens and predicts what the user is trying to say.
+ * Returns primary sentence, 3 predictive suggestion completions, and intent category.
+ */
+export const predictGestureIntent = async (words, token = null) => {
+    if (!words || !words.length) {
+        return { sentence: '', suggestions: [], intent: 'General' };
+    }
+
+    const offlineFallback = predictGestureIntentOffline(words);
+
+    // 1. Backend Prediction API (/api/ai/predict-gesture-sentence)
+    try {
+        const baseURL = getBackendBaseURL();
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+        const res = await fetch(`${baseURL}/api/ai/predict-gesture-sentence`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { Authorization: `Bearer ${token}` } : {})
+            },
+            body: JSON.stringify({ words }),
+            signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+            const data = await res.json();
+            if (data.sentence && data.sentence.trim()) {
+                return {
+                    sentence: data.sentence.trim(),
+                    suggestions: Array.isArray(data.predictions) && data.predictions.length ? data.predictions : offlineFallback.suggestions,
+                    intent: data.intent || offlineFallback.intent,
+                    source: 'gemini'
+                };
+            }
+        }
+    } catch {
+        // Backend unavailable; proceed to Tier 2
+    }
+
+    // 2. Direct Gemini Call (works anywhere on mobile independent of local backend)
+    const geminiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (geminiKey && navigator.onLine) {
+        const prompt = `You are an assistive communication predictor for deaf and non-verbal individuals.
+The user signed these gesture tokens: [${words.join(', ')}].
+Predict what the user is trying to say.
+Return STRICT JSON ONLY in this format:
+{
+  "sentence": "the most natural, polite and complete English sentence they are trying to say",
+  "suggestions": [
+    "Alternative 1 (e.g. polite request)",
+    "Alternative 2 (e.g. urgent / direct)",
+    "Alternative 3 (e.g. casual conversational)"
+  ],
+  "intent": "category like Needs, Emergency, Greeting, Social, Question"
+}`;
+
+        const CANDIDATE_MODELS = ['gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-flash-latest'];
+
+        for (const model of CANDIDATE_MODELS) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+                const gRes = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ parts: [{ text: prompt }] }],
+                            generationConfig: { temperature: 0.2, maxOutputTokens: 1024 }
+                        }),
+                        signal: controller.signal,
+                    }
+                );
+                clearTimeout(timeoutId);
+
+                if (gRes.ok) {
+                    const gData = await gRes.json();
+                    const rawText = gData.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+                    if (rawText) {
+                        const cleanJson = rawText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+                        const parsed = JSON.parse(cleanJson);
+                        return {
+                            sentence: parsed.sentence || offlineFallback.sentence,
+                            suggestions: Array.isArray(parsed.suggestions) && parsed.suggestions.length ? parsed.suggestions : offlineFallback.suggestions,
+                            intent: parsed.intent || offlineFallback.intent,
+                            source: 'gemini-direct'
+                        };
+                    }
+                }
+            } catch {
+                // try next model
+            }
+        }
+    }
+
+    return offlineFallback;
+};
+
+/**
+ * High-speed Universal Audio Transcription Engine (Whisper / Gemini Flash).
+ * Transcribes recorded speech audio chunks from mobile WebView or browser mic.
+ */
+export const transcribeAudio = async (audioBlob, targetLang = 'en', sourceLang = 'auto') => {
+    if (!audioBlob || audioBlob.size === 0) return { text: '', translated: '' };
+
+    const base64Audio = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            const dataUrl = reader.result;
+            const base64 = dataUrl.split(',')[1];
+            resolve(base64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(audioBlob);
+    });
+
+    const mimeType = audioBlob.type || 'audio/webm';
+
+    // Tier 1: Backend proxy (/api/ai/transcribe-translate)
+    try {
+        const baseURL = getBackendBaseURL();
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6500);
+
+        const res = await fetch(`${baseURL}/api/ai/transcribe-translate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                audioBase64: base64Audio,
+                targetLang,
+                mimeType,
+                sourceLang
+            }),
+            signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+            const data = await res.json();
+            if (data?.text || data?.translated) {
+                return {
+                    text: data.text || data.translated || '',
+                    translated: data.translated || data.text || '',
+                    sourceLang: data.sourceLang || sourceLang
+                };
+            }
+        }
+    } catch (err) {
+        console.warn('[STT] Backend transcribe error:', err);
+    }
+
+    // Tier 2: Direct Gemini Flash audio API (works on Android APK without local backend)
+    const geminiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (geminiKey && navigator.onLine) {
+        const prompt = `Listen closely to the audio.
+1. Transcribe the exact words spoken.
+2. If non-English, translate to ${targetLang}.
+3. If no words or only static/silence, return empty string.
+Output STRICT JSON:
+{"text": "transcription", "translated": "translated text", "sourceLang": "language code"}`;
+
+        const GEMINI_CANDIDATES = ['gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-flash-latest'];
+
+        for (const model of GEMINI_CANDIDATES) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 6500);
+
+                const gRes = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{
+                                parts: [
+                                    { text: prompt },
+                                    {
+                                        inlineData: {
+                                            mimeType: mimeType.split(';')[0] || 'audio/wav',
+                                            data: base64Audio
+                                        }
+                                    }
+                                ]
+                            }],
+                            generationConfig: { temperature: 0.1, maxOutputTokens: 1024 }
+                        }),
+                        signal: controller.signal,
+                    }
+                );
+                clearTimeout(timeoutId);
+
+                if (gRes.ok) {
+                    const gData = await gRes.json();
+                    const rawText = gData.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '{}';
+                    const cleanJson = rawText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+                    const parsed = JSON.parse(cleanJson);
+                    if (parsed?.text || parsed?.translated) {
+                        return {
+                            text: parsed.text || parsed.translated || '',
+                            translated: parsed.translated || parsed.text || '',
+                            sourceLang: parsed.sourceLang || sourceLang
+                        };
+                    }
+                }
+            } catch (e2) {
+                console.warn(`[STT] Gemini ${model} transcribe error:`, e2?.message || e2);
+            }
+        }
+    }
+
+    return { text: '', translated: '' };
+};
+
+export const formatGestureSentence = async (words, token = null) => {
+    const res = await predictGestureIntent(words, token);
+    return res.sentence || buildSmartSentence(words);
+};
+
+/**
+ * Intelligent ASL-to-English sentence grammar synthesizer.
+ * Transforms raw sign language gestures into natural conversational English.
+ */
+export function buildSmartSentence(words) {
+    return predictGestureIntentOffline(words).sentence;
+}
+
+/**
+ * Comprehensive offline intent predictor for gesture tokens.
+ * Accurately synthesizes non-verbal user intent into full natural sentences.
+ */
+export function predictGestureIntentOffline(words) {
+    if (!words || !words.length) {
+        return { sentence: '', suggestions: [], intent: 'General' };
+    }
+
+    const lower = words.map(w => w.toLowerCase());
+    const has = (t) => lower.some(w => w === t.toLowerCase() || w.includes(t.toLowerCase()));
+
+    // 1. Water / Thirst
+    if (has('water') || has('drink')) {
+        if (has('more')) {
+            return {
+                sentence: 'Could I please have some more water to drink?',
+                suggestions: [
+                    'Could I please have some more water?',
+                    'I am still thirsty, another glass of water please.',
+                    'Can you refill my water bottle?'
+                ],
+                intent: 'Needs (Thirst)'
+            };
+        }
+        if (has('please')) {
+            return {
+                sentence: 'May I please have a glass of water?',
+                suggestions: [
+                    'May I please have a glass of water?',
+                    'I am thirsty, could you bring me some water?',
+                    'Where can I find drinking water, please?'
+                ],
+                intent: 'Needs (Thirst)'
+            };
+        }
+        return {
+            sentence: 'I am thirsty, could I please get some water to drink?',
+            suggestions: [
+                'I am thirsty, could I please get some water?',
+                'Please give me a glass of drinking water.',
+                'Can I have something to drink?'
+            ],
+            intent: 'Needs (Thirst)'
+        };
+    }
+
+    // 2. Food / Eating / Hunger
+    if (has('eat') || has('food')) {
+        if (has('more')) {
+            return {
+                sentence: 'I am still hungry, could I please have some more food?',
+                suggestions: [
+                    'Could I please have another portion of food?',
+                    'I am still hungry, can I have more?',
+                    'Is there any more food left for me?'
+                ],
+                intent: 'Needs (Hunger)'
+            };
+        }
+        return {
+            sentence: 'I am hungry and would like something to eat, please.',
+            suggestions: [
+                'I would like something to eat, please.',
+                'Is it time for a meal?',
+                'Can we get some food together?'
+            ],
+            intent: 'Needs (Hunger)'
+        };
+    }
+
+    // 3. Stop / Urgent / Emergency
+    if (has('stop')) {
+        if (has('wait')) {
+            return {
+                sentence: 'Please stop and wait a moment for me.',
+                suggestions: [
+                    'Please stop and wait for me.',
+                    'Hold on, please do not proceed yet.',
+                    'Wait right here, please.'
+                ],
+                intent: 'Urgent'
+            };
+        }
+        return {
+            sentence: 'Please stop what you are doing.',
+            suggestions: [
+                'Please stop what you are doing.',
+                'I need you to stop right now.',
+                'Stop, I need assistance.'
+            ],
+            intent: 'Urgent'
+        };
+    }
+
+    // 4. Wait / Patience
+    if (has('wait')) {
+        return {
+            sentence: 'Please wait a moment while I finish communicating.',
+            suggestions: [
+                'Please hold on for just a moment.',
+                'Give me a second to express myself.',
+                'Please wait right there.'
+            ],
+            intent: 'Patience'
+        };
+    }
+
+    // 5. Call me / Contact
+    if (has('call me')) {
+        return {
+            sentence: 'Please give me a call as soon as you have time.',
+            suggestions: [
+                'Please call me on the phone when you are free.',
+                'Can you call my contact number?',
+                'Please reach out to me soon.'
+            ],
+            intent: 'Communication'
+        };
+    }
+
+    // 6. Greetings & Introductions
+    if (has('hello')) {
+        if (has('name')) {
+            return {
+                sentence: 'Hello! What is your name? Nice to meet you.',
+                suggestions: [
+                    'Hello! May I know what your name is?',
+                    'Hello, nice to meet you today.',
+                    'Hello, let me introduce myself.'
+                ],
+                intent: 'Greeting'
+            };
+        }
+        return {
+            sentence: 'Hello! I hope you are having a wonderful day.',
+            suggestions: [
+                'Hello! How are you doing today?',
+                'Hello! Good morning / good afternoon.',
+                'Hello, it is great to see you!'
+            ],
+            intent: 'Greeting'
+        };
+    }
+
+    // 7. Name / Identity
+    if (has('name')) {
+        return {
+            sentence: 'What is your name? It is a pleasure to meet you.',
+            suggestions: [
+                'Could you please tell me your name?',
+                'My name is being signed with gestures.',
+                'May I know who I am speaking with?'
+            ],
+            intent: 'Question'
+        };
+    }
+
+    // 8. Love / Affection
+    if (has('love you')) {
+        return {
+            sentence: 'I love and care about you very much.',
+            suggestions: [
+                'I love you with all my heart.',
+                'Sending you my love and best wishes.',
+                'I really appreciate and love you.'
+            ],
+            intent: 'Affection'
+        };
+    }
+
+    // 9. Apologies / Courtesy
+    if (has('sorry')) {
+        return {
+            sentence: 'I am very sorry, please excuse me.',
+            suggestions: [
+                'I apologize for any inconvenience.',
+                'Sorry about that, please forgive me.',
+                'I am sorry, thank you for your patience.'
+            ],
+            intent: 'Courtesy'
+        };
+    }
+
+    // 10. Agreement / Confirmation
+    if (has('yes') || has('okay') || has('ok')) {
+        return {
+            sentence: 'Yes, that sounds great and works for me.',
+            suggestions: [
+                'Yes, I agree with that.',
+                'That is completely okay with me.',
+                'Yes, let us proceed.'
+            ],
+            intent: 'Confirmation'
+        };
+    }
+
+    // 11. Disagreement / Denial
+    if (has('no')) {
+        return {
+            sentence: 'No, thank you. I would prefer not to.',
+            suggestions: [
+                'No, that is not what I meant.',
+                'No, thank you very much.',
+                'I do not agree with that.'
+            ],
+            intent: 'Response'
+        };
+    }
+
+    // 12. Single token shortcuts
+    if (words.length === 1) {
+        const w = words[0];
+        const wl = w.toLowerCase();
+        if (wl === 'promise') return { sentence: 'I give you my promise.', suggestions: ['I promise.', 'You have my word.', 'I will keep my promise.'], intent: 'Social' };
+        if (wl === 'peace') return { sentence: 'Wishing you peace and harmony.', suggestions: ['Peace to you.', 'Stay calm and peaceful.', 'Peace and goodwill.'], intent: 'Social' };
+        if (wl === 'rock') return { sentence: 'You are awesome! Rock on.', suggestions: ['Rock on!', 'Great job!', 'Keep rocking!'], intent: 'Social' };
+    }
+
+    // Default synthesis
+    const joined = words.join(' ');
+    const capital = joined.charAt(0).toUpperCase() + joined.slice(1);
+    const sentence = capital.endsWith('.') || capital.endsWith('!') || capital.endsWith('?') ? capital : `${capital}.`;
+    return {
+        sentence,
+        suggestions: [
+            sentence,
+            `I want to communicate: ${joined}.`,
+            `Please understand: ${joined}.`
+        ],
+        intent: 'General'
+    };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -24,6 +24,8 @@ import SettingsPage     from './pages/SettingsPage';
 import EmergencyPage    from './pages/EmergencyPage';
 import LogsPage         from './pages/LogsPage';
 import AdminPage        from './pages/AdminPage';
+import ResearchDashboard from './pages/ResearchDashboard';
+import MultimodalPage    from './pages/MultimodalPage';
 
 const App = () => (
   <ThemeProvider>
@@ -32,16 +34,19 @@ const App = () => (
         <MultimodalFusionProvider>
           <VoiceCommandProvider>
             <Toaster
-              position="top-right"
+              position="top-center"
               toastOptions={{
-                duration: 3500,
+                duration: 3200,
                 style: {
                   background: 'var(--bg-card)',
                   color: 'var(--text-primary)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: '12px',
+                  border: '1px solid var(--border)',
+                  borderRadius: '14px',
                   fontSize: '0.875rem',
-                  boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+                  boxShadow: '0 4px 20px rgba(0,0,0,0.12)',
+                  fontFamily: 'var(--font-sans)',
+                  fontWeight: 500,
+                  maxWidth: '380px',
                 },
               }}
             />
@@ -61,6 +66,8 @@ const App = () => (
               <Route path="/emergency"  element={<ProtectedRoute><EmergencyPage /></ProtectedRoute>} />
               <Route path="/logs"       element={<ProtectedRoute><LogsPage /></ProtectedRoute>} />
               <Route path="/admin"      element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
+              <Route path="/research"   element={<ProtectedRoute><ResearchDashboard /></ProtectedRoute>} />
+              <Route path="/multimodal" element={<ProtectedRoute><MultimodalPage /></ProtectedRoute>} />
 
               {/* Default redirect */}
               <Route path="/"  element={<Navigate to="/dashboard" replace />} />

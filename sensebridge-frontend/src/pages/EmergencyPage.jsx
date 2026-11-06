@@ -1,15 +1,59 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import AppLayout from '../layouts/AppLayout';
 import { contactService, emergencyService } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'react-hot-toast';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { speak, cancelSpeech } from '../services/aiService';
+import haptics from '../services/haptics';
 import {
     AlertTriangle, Phone, Mail, MapPin, Plus, Trash2, Star,
     X, Shield, History, MessageCircle, Copy, Check, Navigation,
+    Save, Bell, Send, CheckCircle2, Siren, Volume2,
 } from 'lucide-react';
 
 const COUNTDOWN_S = 5;
+
+// Acoustic alarm siren using Web Audio API
+const playSosSiren = () => {
+    try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(850, ctx.currentTime);
+        osc.frequency.linearRampToValueAtTime(1300, ctx.currentTime + 0.3);
+        osc.frequency.linearRampToValueAtTime(850, ctx.currentTime + 0.6);
+        osc.frequency.linearRampToValueAtTime(1300, ctx.currentTime + 0.9);
+        gain.gain.setValueAtTime(0.25, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 1.2);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 1.2);
+    } catch {}
+};
+
+// Acoustic ticking beep for countdown
+const playCountdownBeep = () => {
+    try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(900, ctx.currentTime);
+        gain.gain.setValueAtTime(0.12, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.15);
+    } catch {}
+};
 
 // ── Build the SOS text message ───────────────────────────────────────────────
 const buildSOSText = (userName, mapsLink) =>
@@ -44,48 +88,102 @@ const EmergencyPage = () => {
     const [saving,    setSaving]    = useState(false);
     const [locStatus, setLocStatus] = useState('');
     const [copied,    setCopied]    = useState(false);
+
+    // Direct SOS phone and mail configuration
+    const [sosPhone, setSosPhone] = useState(() => localStorage.getItem('sb_sos_phone') || '+919876543210');
+    const [sosEmail, setSosEmail] = useState(() => localStorage.getItem('sb_sos_email') || 'emergency@sensebridge.ai');
+    const [lastSosText, setLastSosText] = useState('');
+
     const timerRef   = useRef(null);
     const coordsRef  = useRef(null);
     const sosTextRef = useRef('');
 
     useEffect(() => {
         contactService.getAll()
-            .then(({ data }) => setContacts(data.data || []))
-            .catch(() => toast.error('Failed to load contacts'))
+            .then(({ data }) => {
+                const list = data?.data || [];
+                setContacts(list);
+                const primary = list.find(c => c.isPrimary) || list[0];
+                if (primary) {
+                    if (!localStorage.getItem('sb_sos_phone') && primary.phone) {
+                        setSosPhone(primary.phone);
+                    }
+                    if (!localStorage.getItem('sb_sos_email') && primary.email) {
+                        setSosEmail(primary.email);
+                    }
+                }
+            })
+            .catch(() => setContacts([]))
             .finally(() => setLoading(false));
     }, []);
 
-    // ── SOS countdown ────────────────────────────────────────────────────────
-    const handleSOS = () => {
+    // ── Save Quick SOS Phone & Email ─────────────────────────────────────────
+    const saveQuickSosSettings = () => {
+        if (!sosPhone.trim() && !sosEmail.trim()) {
+            toast.error('Please enter at least an SOS phone number or email.');
+            return;
+        }
+        localStorage.setItem('sb_sos_phone', sosPhone.trim());
+        localStorage.setItem('sb_sos_email', sosEmail.trim());
+        toast.success('✅ Emergency Phone & Email saved for SOS!');
+    };
+
+    // ── SOS countdown & dispatch ─────────────────────────────────────────────
+    const handleSOS = useCallback(() => {
         if (sosPhase !== 'idle') return;
         setSosPhase('countdown');
         setCountdown(COUNTDOWN_S);
+        playCountdownBeep();
+        haptics.warning();
 
         // Start getting GPS immediately while countdown ticks
         navigator.geolocation?.getCurrentPosition(
             ({ coords }) => { coordsRef.current = { lat: coords.latitude, lng: coords.longitude }; },
             () => { coordsRef.current = null; },
-            { timeout: 5000, maximumAge: 60000, enableHighAccuracy: false }
+            { timeout: 5000, maximumAge: 60000, enableHighAccuracy: true }
         );
 
         let remaining = COUNTDOWN_S;
         timerRef.current = setInterval(() => {
             remaining -= 1;
             setCountdown(remaining);
-            if (remaining <= 0) { clearInterval(timerRef.current); dispatchSOS(); }
+            if (remaining > 0) {
+                playCountdownBeep();
+            } else {
+                clearInterval(timerRef.current);
+                dispatchSOS();
+            }
         }, 1000);
-    };
+    }, [sosPhase]);
+
+    // Listen for voice command "send sos"
+    useEffect(() => {
+        const onVoiceSos = () => handleSOS();
+        window.addEventListener('vc:sos', onVoiceSos);
+        return () => window.removeEventListener('vc:sos', onVoiceSos);
+    }, [handleSOS]);
 
     const cancelSOS = () => {
         clearInterval(timerRef.current);
         setSosPhase('idle');
         setCountdown(COUNTDOWN_S);
         coordsRef.current = null;
+        cancelSpeech();
         toast('SOS cancelled.', { icon: '✅' });
+    };
+
+    const triggerInstantSOS = () => {
+        if (timerRef.current) clearInterval(timerRef.current);
+        dispatchSOS();
     };
 
     const dispatchSOS = async () => {
         setSosPhase('sent');
+
+        // Play loud acoustic siren & tactile haptics
+        playSosSiren();
+        haptics.emergency();
+        speak('Emergency SOS activated! Dispatching location to your emergency phone and email contacts.', { priority: 'high' });
 
         // ── 1. Build location + message ─────────────────────────────────
         const lat = coordsRef.current?.lat;
@@ -93,6 +191,7 @@ const EmergencyPage = () => {
         const mapsLink = lat && lng ? `https://maps.google.com/?q=${lat},${lng}` : null;
         const sosText  = buildSOSText(user?.name, mapsLink);
         sosTextRef.current = sosText;
+        setLastSosText(sosText);
 
         // ── 2. Copy SOS message to clipboard (works offline, always) ────
         try { await navigator.clipboard.writeText(sosText); } catch {}
@@ -101,10 +200,12 @@ const EmergencyPage = () => {
         let backendResult = null;
         try {
             const { data } = await emergencyService.sos({
-                userId: user?._id,
+                userId: user?._id || 'guest_user',
                 source: 'button',
                 latitude:  lat ?? null,
                 longitude: lng ?? null,
+                phone: sosPhone,
+                email: sosEmail,
                 timestamp: Date.now() / 1000,
                 message:   sosText,
             });
@@ -113,10 +214,24 @@ const EmergencyPage = () => {
             console.warn('[SOS] Backend unavailable:', err.message);
         }
 
-        // ── 4. Build per-contact action list ────────────────────────────
-        const actionList = contacts.map(c => {
-            const smsSent   = backendResult?.contacts?.find(r => r.name === c.name)?.smsSent  ?? false;
-            const emailSent = backendResult?.contacts?.find(r => r.name === c.name)?.emailSent ?? false;
+        // ── 4. Build per-contact action list (ensure direct phone & email are included) ──
+        let mergedContacts = [...contacts];
+        if (sosPhone || sosEmail) {
+            const exists = mergedContacts.some(c => (sosPhone && c.phone === sosPhone) || (sosEmail && c.email === sosEmail));
+            if (!exists) {
+                mergedContacts.unshift({
+                    name: 'Primary SOS Contact',
+                    phone: sosPhone,
+                    email: sosEmail,
+                    relationship: 'Primary SOS',
+                    isPrimary: true,
+                });
+            }
+        }
+
+        const actionList = mergedContacts.map(c => {
+            const smsSent   = backendResult?.contacts?.find(r => r.name === c.name || r.phone === c.phone)?.smsSent  ?? false;
+            const emailSent = backendResult?.contacts?.find(r => r.name === c.name || r.email === c.email)?.emailSent ?? false;
             return { ...c, smsSent, emailSent };
         });
 
@@ -126,6 +241,8 @@ const EmergencyPage = () => {
             ts: new Date().toLocaleTimeString(),
             mapsLink,
             sosText,
+            sosPhone,
+            sosEmail,
             contacts: actionList,
             smsSentCount:   backendResult?.smsSentCount   ?? 0,
             emailSentCount: backendResult?.emailSentCount ?? 0,
@@ -136,12 +253,12 @@ const EmergencyPage = () => {
 
         toast.error(
             backendResult?.contactsNotified > 0
-                ? `🚨 SOS sent! ${backendResult.contactsNotified} contact(s) notified automatically.`
-                : '🚨 SOS logged. Use the buttons below to alert your contacts.',
+                ? `🚨 SOS sent! Notified via automated dispatch.`
+                : `🚨 SOS activated! Direct Phone & Email actions ready below.`,
             { duration: 8000 }
         );
 
-        setTimeout(() => { setSosPhase('idle'); setCountdown(COUNTDOWN_S); }, 5000);
+        setTimeout(() => { setSosPhase('idle'); setCountdown(COUNTDOWN_S); }, 6000);
     };
 
     // ── Copy SOS text ────────────────────────────────────────────────────────
@@ -203,12 +320,140 @@ const EmergencyPage = () => {
     return (
         <AppLayout>
             <div style={{ maxWidth: 720 }}>
-                <h1 style={{ fontSize: '1.5rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 10, marginBottom: '0.5rem' }}>
-                    <AlertTriangle size={24} style={{ color: 'var(--color-danger)' }} /> Emergency
+                <h1 style={{ fontSize: '1.5rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 10, marginBottom: '0.35rem' }}>
+                    <AlertTriangle size={24} style={{ color: 'var(--color-danger)' }} /> Emergency SOS
                 </h1>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '2rem' }}>
-                    SOS alert with GPS — sends via WhatsApp, Email &amp; SMS to your emergency contacts
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.25rem' }}>
+                    Instant emergency alert with live GPS coordinates via Phone Call, SMS, WhatsApp &amp; Email
                 </p>
+
+                {/* ── Quick SOS Phone & Mail Setup Card ──────────────────────── */}
+                <div className="card" style={{
+                    marginBottom: '1.25rem',
+                    border: '1px solid rgba(255, 75, 110, 0.35)',
+                    background: 'linear-gradient(135deg, rgba(255, 75, 110, 0.08), rgba(108, 99, 255, 0.05))',
+                    padding: '1.2rem',
+                    borderRadius: 16,
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div style={{
+                                width: 38, height: 38, borderRadius: 12,
+                                background: 'rgba(255, 75, 110, 0.2)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                color: 'var(--color-danger)'
+                            }}>
+                                <Phone size={20} />
+                            </div>
+                            <div>
+                                <div style={{ fontWeight: 800, fontSize: '0.98rem', color: 'var(--text-primary)' }}>
+                                    Emergency SOS Phone &amp; Mail
+                                </div>
+                                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                    Recipients for direct phone calls, SMS, WhatsApp, and email alerts
+                                </div>
+                            </div>
+                        </div>
+
+                        <button
+                            onClick={saveQuickSosSettings}
+                            className="btn btn-primary"
+                            style={{ fontSize: '0.78rem', padding: '6px 14px', gap: 6, borderRadius: 10 }}
+                        >
+                            <Save size={14} /> Save SOS Details
+                        </button>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
+                        {/* Phone Input & Actions */}
+                        <div>
+                            <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                                <Phone size={13} style={{ color: 'var(--color-danger)' }} />
+                                Emergency Phone (Calls, SMS &amp; WhatsApp)
+                            </label>
+                            <input
+                                className="form-input"
+                                placeholder="+919876543210 or 112"
+                                value={sosPhone}
+                                onChange={(e) => setSosPhone(e.target.value)}
+                                style={{ fontSize: '0.88rem', fontWeight: 600, letterSpacing: '0.02em', width: '100%' }}
+                            />
+                            {sosPhone && (
+                                <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                                    <a
+                                        href={`tel:${sosPhone}`}
+                                        style={{
+                                            display: 'inline-flex', alignItems: 'center', gap: 4,
+                                            padding: '4px 10px', borderRadius: 6,
+                                            background: 'rgba(255, 75, 110, 0.15)', color: 'var(--color-danger)',
+                                            fontSize: '0.74rem', fontWeight: 700, textDecoration: 'none'
+                                        }}
+                                    >
+                                        <Phone size={12} /> Call
+                                    </a>
+                                    <a
+                                        href={`sms:${sosPhone}?body=${encodeURIComponent(lastSosText || `🚨 EMERGENCY SOS from ${user?.name || 'SenseBridge user'}! Please contact me immediately.`)}`}
+                                        style={{
+                                            display: 'inline-flex', alignItems: 'center', gap: 4,
+                                            padding: '4px 10px', borderRadius: 6,
+                                            background: 'rgba(108, 99, 255, 0.15)', color: 'var(--color-primary)',
+                                            fontSize: '0.74rem', fontWeight: 700, textDecoration: 'none'
+                                        }}
+                                    >
+                                        <MessageCircle size={12} /> SMS
+                                    </a>
+                                    <button
+                                        type="button"
+                                        onClick={() => openWhatsApp(sosPhone, lastSosText || `🚨 EMERGENCY SOS from ${user?.name || 'SenseBridge user'}! Please contact me immediately.`)}
+                                        style={{
+                                            display: 'inline-flex', alignItems: 'center', gap: 4,
+                                            padding: '4px 10px', borderRadius: 6, border: 'none', cursor: 'pointer',
+                                            background: '#25D366', color: '#fff',
+                                            fontSize: '0.74rem', fontWeight: 700
+                                        }}
+                                    >
+                                        <MessageCircle size={12} /> WhatsApp
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Email Input & Actions */}
+                        <div>
+                            <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                                <Mail size={13} style={{ color: 'var(--color-primary)' }} />
+                                Emergency Alert Email
+                            </label>
+                            <input
+                                className="form-input"
+                                type="email"
+                                placeholder="guardian@example.com"
+                                value={sosEmail}
+                                onChange={(e) => setSosEmail(e.target.value)}
+                                style={{ fontSize: '0.88rem', fontWeight: 600, width: '100%' }}
+                            />
+                            {sosEmail && (
+                                <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                                    <a
+                                        href={mailtoLink(
+                                            sosEmail,
+                                            `🚨 Emergency SOS Alert from ${user?.name || 'SenseBridge user'}`,
+                                            lastSosText || `🚨 EMERGENCY SOS ALERT from ${user?.name || 'SenseBridge user'}!\nTime: ${new Date().toLocaleString()}\nPlease check on me immediately.`
+                                        )}
+                                        style={{
+                                            display: 'inline-flex', alignItems: 'center', gap: 4,
+                                            padding: '4px 10px', borderRadius: 6,
+                                            background: 'rgba(108, 99, 255, 0.15)', color: 'var(--color-primary)',
+                                            fontSize: '0.74rem', fontWeight: 700, textDecoration: 'none'
+                                        }}
+                                    >
+                                        <Mail size={12} /> Send Email
+                                    </a>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
 
                 {/* ── SOS Button zone ─────────────────────────────────────────── */}
                 <div className="card" style={{
@@ -248,21 +493,31 @@ const EmergencyPage = () => {
                     </div>
 
                     <p style={{ marginTop: '1.25rem', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                        {sosPhase === 'idle'      && 'Press to send emergency alert with your GPS location'}
-                        {sosPhase === 'countdown' && '⏱ Sending SOS in…  press Cancel to abort'}
-                        {sosPhase === 'sent'      && '✅ SOS triggered — use the contact buttons below to notify people'}
+                        {sosPhase === 'idle'      && 'Press to activate Emergency SOS with GPS, phone call & email dispatch'}
+                        {sosPhase === 'countdown' && '⏱ Sending SOS in… press Cancel or Send Now to dispatch immediately'}
+                        {sosPhase === 'sent'      && '✅ SOS triggered! Alerts dispatched to phone and email contacts'}
                     </p>
 
                     <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: '1rem', flexWrap: 'wrap' }}>
                         {sosPhase === 'countdown' && (
-                            <button className="btn btn-ghost" onClick={cancelSOS} style={{ gap: 8, color: 'var(--color-danger)' }}>
-                                <X size={16} /> Cancel SOS
-                            </button>
+                            <>
+                                <button className="btn btn-danger" onClick={triggerInstantSOS} style={{ gap: 6, fontSize: '0.82rem' }}>
+                                    <Send size={15} /> Send Immediately
+                                </button>
+                                <button className="btn btn-ghost" onClick={cancelSOS} style={{ gap: 6, color: 'var(--color-danger)' }}>
+                                    <X size={15} /> Cancel SOS
+                                </button>
+                            </>
                         )}
                         {sosPhase === 'idle' && (
-                            <button className="btn btn-ghost" onClick={shareLocation} style={{ gap: 8 }}>
-                                <MapPin size={16} /> Share My Location
-                            </button>
+                            <>
+                                <button className="btn btn-primary" onClick={triggerInstantSOS} style={{ gap: 6, fontSize: '0.82rem' }}>
+                                    <Siren size={15} /> Instant SOS (Skip Timer)
+                                </button>
+                                <button className="btn btn-ghost" onClick={shareLocation} style={{ gap: 6 }}>
+                                    <MapPin size={15} /> Share My Location
+                                </button>
+                            </>
                         )}
                     </div>
 

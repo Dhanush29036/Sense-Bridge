@@ -19,10 +19,13 @@ export const ThemeProvider = ({ children }) => {
         }
     });
 
-    // Apply theme to document root
+    // Apply theme & font scale to document root
     useEffect(() => {
         document.documentElement.setAttribute('data-theme', prefs.theme);
-        document.documentElement.style.setProperty('--font-scale', prefs.fontScale);
+        const scale = prefs.fontScale || 1;
+        document.documentElement.style.setProperty('--font-scale', scale);
+        // Set root font size in percentage so all rem units across the app scale
+        document.documentElement.style.fontSize = `${scale * 100}%`;
         localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
     }, [prefs]);
 

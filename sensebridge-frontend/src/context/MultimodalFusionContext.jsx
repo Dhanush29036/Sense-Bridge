@@ -15,7 +15,10 @@
 
 import { createContext, useContext, useRef, useState, useEffect, useCallback } from 'react';
 import { useAuth } from './AuthContext';
-import { apiUrl } from '../services/api';
+import { TemporalFilter, getConfig } from '../config/config';
+import { getBackendBaseURL, getAIBaseURL } from '../services/networkConfig';
+import { speak } from '../services/aiService';
+import haptics from '../services/haptics';
 
 // ─── Event names ─────────────────────────────────────────────────────────────
 export const EV_VISION  = 'sb:vision';
@@ -32,6 +35,7 @@ const MultimodalFusionContext = createContext(null);
 
 export const MultimodalFusionProvider = ({ children }) => {
     const { token } = useAuth();
+    const temporalFilter = useRef(new TemporalFilter()).current;
 
     // Latest signals from each modality (with timestamp)
     const signals = useRef({ vision: null, speech: null, gesture: null });
@@ -103,34 +107,72 @@ export const MultimodalFusionProvider = ({ children }) => {
         try {
             let result;
 
-            // ── Try cloud fusion (Gemini backend) ──────────────────────
-            if (token) {
-                const res = await fetch(apiUrl('/api/ai/fuse'), {
+            // ── Primary: SenseBridge Python Multimodal Fusion Engine (/api/fuse) ──
+            try {
+                const aiBase = getAIBaseURL();
+                const fuseRes = await fetch(`${aiBase}/api/fuse`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload),
-                    signal: AbortSignal.timeout(5000),
+                    signal: AbortSignal.timeout(3000),
                 });
-                if (res.ok) result = await res.json();
+                if (fuseRes.ok) result = await fuseRes.json();
+            } catch {
+                // transient, try cloud
+            }
+
+            // ── Secondary: Cloud Gemini Fusion (/api/ai/fuse) ───────────
+            if (!result && token) {
+                try {
+                    const backendBase = getBackendBaseURL();
+                    const res = await fetch(`${backendBase}/api/ai/fuse`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                        body: JSON.stringify(payload),
+                        signal: AbortSignal.timeout(4000),
+                    });
+                    if (res.ok) result = await res.json();
+                } catch {
+                    // transient
+                }
             }
 
             // ── Client-side fusion fallback ────────────────────────────
             if (!result) result = clientFusion(vision, speech, gesture);
 
+            const shouldAnnounce = temporalFilter.shouldAnnounce(
+                result.awareness,
+                result.priority === 'critical' ? 1.0 : (result.confidence || 0.8),
+                'fusion'
+            );
+
             const insight = {
-                text:     result.awareness,
-                intent:   result.intent    || 'general',
-                priority: result.priority  || 'normal',
-                suggestions: result.suggestions || [],
+                text:           result.awareness,
+                intent:         result.intent    || 'general',
+                priority:       result.priority  || 'normal',
+                suggestions:    result.suggestions || [],
                 sources:  {
                     vision:  !!vision,
                     speech:  !!speech,
                     gesture: !!gesture,
                 },
+                shouldAnnounce,
                 fused_at: new Date().toLocaleTimeString(),
             };
 
             setAwareness(insight);
+            if (shouldAnnounce && insight.text) {
+                if (insight.priority === 'critical') {
+                    haptics.error();
+                    speak(insight.text, { priority: 'high' });
+                } else if (insight.priority === 'high') {
+                    haptics.warning();
+                    speak(insight.text, { priority: 'normal' });
+                } else {
+                    haptics.tap();
+                    speak(insight.text, { priority: 'normal' });
+                }
+            }
 
             // Broadcast so any component can listen
             window.dispatchEvent(new CustomEvent(EV_FUSION, { detail: insight }));
@@ -139,8 +181,33 @@ export const MultimodalFusionProvider = ({ children }) => {
             // Graceful — try client fallback
             const result = clientFusion(vision, speech, gesture);
             if (result) {
-                const insight = { text: result.awareness, intent: 'general', priority: 'normal', suggestions: [], sources: { vision: !!vision, speech: !!speech, gesture: !!gesture }, fused_at: new Date().toLocaleTimeString() };
+                const shouldAnnounce = temporalFilter.shouldAnnounce(
+                    result.awareness,
+                    result.priority === 'critical' ? 1.0 : 0.8,
+                    'fusion'
+                );
+                const insight = {
+                    text: result.awareness,
+                    intent: result.intent || 'general',
+                    priority: result.priority || 'normal',
+                    suggestions: result.suggestions || [],
+                    sources: { vision: !!vision, speech: !!speech, gesture: !!gesture },
+                    shouldAnnounce,
+                    fused_at: new Date().toLocaleTimeString()
+                };
                 setAwareness(insight);
+                if (shouldAnnounce && insight.text) {
+                    if (insight.priority === 'critical') {
+                        haptics.error();
+                        speak(insight.text, { priority: 'high' });
+                    } else if (insight.priority === 'high') {
+                        haptics.warning();
+                        speak(insight.text, { priority: 'normal' });
+                    } else {
+                        haptics.tap();
+                        speak(insight.text, { priority: 'normal' });
+                    }
+                }
                 window.dispatchEvent(new CustomEvent(EV_FUSION, { detail: insight }));
             }
         } finally {
@@ -153,12 +220,14 @@ export const MultimodalFusionProvider = ({ children }) => {
     const emitSpeech  = useCallback((data) => window.dispatchEvent(new CustomEvent(EV_SPEECH,  { detail: data })), []);
     const emitGesture = useCallback((data) => window.dispatchEvent(new CustomEvent(EV_GESTURE, { detail: data })), []);
 
+    const shouldAnnounce = useCallback((label, conf, mod) => temporalFilter.shouldAnnounce(label, conf, mod), [temporalFilter]);
     const clearAwareness = useCallback(() => setAwareness(null), []);
 
     return (
         <MultimodalFusionContext.Provider value={{
             awareness, activeModals, fusionBusy,
             emitVision, emitSpeech, emitGesture,
+            shouldAnnounce, temporalFilter,
             clearAwareness,
         }}>
             {children}

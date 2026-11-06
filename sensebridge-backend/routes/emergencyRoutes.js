@@ -64,22 +64,29 @@ const getMailer = () => {
  */
 router.post('/sos', auth, async (req, res) => {
     try {
-        const { userId, source = 'button', latitude, longitude, timestamp, message } = req.body;
+        const { userId, source = 'button', latitude, longitude, timestamp, message, phone, email } = req.body;
 
-        if (!userId) return res.status(400).json({ success: false, message: 'userId required' });
-
-        const user = await User.findById(userId).select('name role email');
-        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+        const mongoose = require('mongoose');
+        let user = null;
+        if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+            user = await User.findById(userId).select('name role email');
+        }
+        const userName = user?.name || req.user?.name || 'SenseBridge user';
 
         // 1. Log event
-        const log = await EmergencyLog.create({
-            user: userId,
-            source,
-            latitude,
-            longitude,
-            timestamp: timestamp ? new Date(timestamp * 1000) : new Date(),
-            status: 'dispatched',
-        });
+        let log = null;
+        try {
+            log = await EmergencyLog.create({
+                user: user?._id || null,
+                source,
+                latitude,
+                longitude,
+                timestamp: timestamp ? new Date(timestamp * 1000) : new Date(),
+                status: 'dispatched',
+            });
+        } catch (err) {
+            console.warn('[SOS] EmergencyLog save error:', err.message);
+        }
 
         // 2. Build location link + message text
         const mapsLink = (latitude && longitude)
@@ -88,7 +95,7 @@ router.post('/sos', auth, async (req, res) => {
 
         const timeStr = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
         const smsBody =
-            `🚨 EMERGENCY ALERT from ${user.name || 'SenseBridge user'}\n` +
+            `🚨 EMERGENCY ALERT from ${userName}\n` +
             `Source: ${source}\n` +
             `Location: ${mapsLink || 'unavailable'}\n` +
             `Time: ${timeStr}`;
@@ -99,7 +106,7 @@ router.post('/sos', auth, async (req, res) => {
                 <h2 style="margin:0">&#x1F6A8; Emergency Alert &#x2014; SenseBridge</h2>
               </div>
               <div style="padding:20px 24px;background:#fff;border:1px solid #eee;border-radius:0 0 8px 8px">
-                <p><strong>${user.name || 'A SenseBridge user'}</strong> has triggered an emergency SOS alert.</p>
+                <p><strong>${userName}</strong> has triggered an emergency SOS alert.</p>
 
                 ${message ? `<div style="background:#fff5f5;border-left:4px solid #ff4b6e;padding:12px 16px;border-radius:4px;margin:12px 0;font-size:0.95rem;white-space:pre-wrap;color:#333">${message}</div>` : ''}
 
@@ -120,7 +127,26 @@ router.post('/sos', auth, async (req, res) => {
             </div>`;
 
         // 3. Send to each contact via all available channels
-        const contacts = await EmergencyContact.find({ user: userId });
+        let contacts = [];
+        if (user?._id) {
+            try {
+                contacts = await EmergencyContact.find({ user: user._id });
+            } catch (err) {
+                console.warn('[SOS] Contact fetch failed:', err.message);
+            }
+        }
+
+        // Merge direct phone / email if provided
+        if (phone || email) {
+            const alreadyPresent = contacts.some(c => (phone && c.phone === phone) || (email && c.email === email));
+            if (!alreadyPresent) {
+                contacts.unshift({
+                    name: 'Primary SOS Contact',
+                    phone: phone || null,
+                    email: email || null,
+                });
+            }
+        }
         const twilioClient = getTwilioClient();
         const mailer       = getMailer();
         const results = [];
@@ -149,7 +175,7 @@ router.post('/sos', auth, async (req, res) => {
                     await mailer.sendMail({
                         from:    process.env.EMAIL_FROM || process.env.EMAIL_USER,
                         to:      contact.email,
-                        subject: `🚨 Emergency Alert from ${user.name || 'SenseBridge'}`,
+                        subject: `🚨 Emergency Alert from ${userName || 'SenseBridge'}`,
                         text:    smsBody,
                         html:    htmlBody,
                     });
@@ -169,12 +195,13 @@ router.post('/sos', auth, async (req, res) => {
 
         res.json({
             success: true,
-            eventId: log._id,
+            eventId: log?._id || 'local-sos',
             contactsNotified: totalNotified,
             smsSentCount,
             emailSentCount,
             contacts: results,
             mapsLink,
+            smsBody,
             twilioConfigured: !!twilioClient,
             emailConfigured:  !!mailer,
         });

@@ -51,12 +51,17 @@ class ObjectTracker:
         self._last_alert: dict[int, float] = {}
 
         if _HAS_SUPERVISION:
-            self._tracker = sv.ByteTracker(
-                track_activation_threshold=conf_threshold,
-                lost_track_buffer=30,
-                minimum_matching_threshold=0.8,
-                frame_rate=15,
-            )
+            tracker_cls = getattr(sv, "ByteTrack", getattr(sv, "ByteTracker", None))
+            if tracker_cls is not None:
+                self._tracker = tracker_cls(
+                    track_activation_threshold=conf_threshold,
+                    lost_track_buffer=30,
+                    minimum_matching_threshold=0.8,
+                    frame_rate=15,
+                )
+            else:
+                self._tracker = None
+                print("[WARN] Neither ByteTrack nor ByteTracker found in supervision — falling back.")
         else:
             self._tracker = None
             print("[WARN] supervision not installed — tracking disabled, IDs will be ephemeral.")

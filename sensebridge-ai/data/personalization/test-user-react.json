@@ -1,0 +1,20 @@
+{
+  "user_id": "test-user-react",
+  "preferred_mode": "voice",
+  "voice_speed": 175,
+  "language": "en",
+  "high_contrast": false,
+  "large_text": false,
+  "font_scale": 1.0,
+  "label_weights": {
+    "stairs": 1.9999
+  },
+  "dismiss_counts": {},
+  "reaction_counts": {
+    "stairs": 25
+  },
+  "recent_labels": [],
+  "zone_risk": {},
+  "created_at": 1791365168.2822888,
+  "updated_at": 1791365961.8600771
+}

@@ -3,8 +3,10 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import AuthLayout from '../../layouts/AuthLayout';
 import LoadingSpinner from '../../components/LoadingSpinner';
+import ServerConfigModal from '../../components/ServerConfigModal';
+import { getBackendBaseURL } from '../../services/networkConfig';
 import { toast } from 'react-hot-toast';
-import { User, Mail, Lock } from 'lucide-react';
+import { User, Mail, Lock, Server, Zap } from 'lucide-react';
 
 const ROLES = [
     { value: 'blind',  label: '👁️ Vision Impaired',  desc: 'Object detection & audio alerts' },
@@ -14,12 +16,13 @@ const ROLES = [
 ];
 
 const RegisterPage = () => {
-    const { register } = useAuth();
+    const { register, loginAsGuest } = useAuth();
     const navigate = useNavigate();
 
     const [form, setForm] = useState({ name: '', email: '', password: '', role: '' });
     const [loading, setLoading] = useState(false);
     const [errors, setErrors] = useState({});
+    const [showServerModal, setShowServerModal] = useState(false);
 
     const validate = () => {
         const e = {};
@@ -42,7 +45,11 @@ const RegisterPage = () => {
             toast.success('Account created! Welcome to SenseBridge 🎉');
             navigate('/dashboard');
         } catch (err) {
-            toast.error(err.response?.data?.message || 'Registration failed.');
+            console.error('Registration error:', err);
+            const msg = !err.response
+                ? 'Cannot connect to server. Check Wi-Fi or tap Server Settings below.'
+                : (err.response?.data?.message || 'Registration failed.');
+            toast.error(msg);
         } finally {
             setLoading(false);
         }
@@ -113,11 +120,52 @@ const RegisterPage = () => {
                     </button>
                 </form>
 
+                <div style={{ display: 'flex', alignItems: 'center', margin: '14px 0', gap: 10 }}>
+                    <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>or</span>
+                    <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                </div>
+
+                <button
+                    type="button"
+                    onClick={() => {
+                        loginAsGuest(form.role || 'mixed');
+                        toast.success('Welcome! Using offline assistive mode.');
+                        navigate('/dashboard');
+                    }}
+                    className="btn btn-secondary"
+                    style={{ width: '100%', borderRadius: 14, padding: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: '0.85rem' }}
+                >
+                    <Zap size={15} color="var(--blue)" />
+                    <span>Quick Start (Offline / Anywhere)</span>
+                </button>
+
                 <p style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
                     Already have an account?{' '}
-                    <Link to="/login" style={{ color: 'var(--color-accent)', fontWeight: 700 }}>Sign in</Link>
+                    <Link to="/login" style={{ color: 'var(--blue)', fontWeight: 700 }}>Sign in</Link>
                 </p>
+
+                <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border)', textAlign: 'center' }}>
+                    <button
+                        type="button"
+                        onClick={() => setShowServerModal(true)}
+                        style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            fontSize: '0.74rem', color: 'var(--text-muted)',
+                            display: 'inline-flex', alignItems: 'center', gap: 6,
+                            padding: '4px 8px', borderRadius: 8,
+                        }}
+                    >
+                        <Server size={13} color="var(--blue)" />
+                        <span>Server: <strong style={{ color: 'var(--text-secondary)' }}>{getBackendBaseURL() || 'Local Proxy'}</strong></span>
+                    </button>
+                </div>
             </div>
+
+            <ServerConfigModal
+                isOpen={showServerModal}
+                onClose={() => setShowServerModal(false)}
+            />
         </AuthLayout>
     );
 };

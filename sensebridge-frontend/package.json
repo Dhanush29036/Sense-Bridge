@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "cap:sync": "npx cap sync android",
+    "cap:open": "npx cap open android",
+    "build:apk": "npm run build && npx cap sync android && cd android && .\\gradlew.bat assembleDebug"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.0",
@@ -27,7 +30,8 @@
     "react-dom": "^19.2.0",
     "react-hot-toast": "^2.6.0",
     "react-leaflet": "^5.0.0",
-    "react-router-dom": "^7.13.1"
+    "react-router-dom": "^7.13.1",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.3.0",
