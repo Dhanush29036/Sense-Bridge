@@ -40,7 +40,7 @@ $^{\S}$katamonitejaswini@gmail.com, $^{\P}$rohanchowdary2468@gmail.com
 
 % ================= ABSTRACT =================
 \begin{abstract}
-Individuals experiencing visual, hearing, or speech impairments confront compounding barriers to independent navigation, environmental awareness, and interpersonal communication. Contemporary assistive solutions suffer from severe architectural fragmentation: users must continuously toggle between disparate single-purpose utilities (e.g., isolated obstacle detectors, standalone speech transcribers, basic sign interpreters), inducing prohibitive cognitive overhead and lacking unified contextual arbitration. In this paper, we introduce \textit{SenseBridge}, a context-aware, multimodal edge-intelligence assistive system engineered to deliver real-time environmental perception, predictive interpersonal communication, and proactive personal safety. SenseBridge contributes five fundamental architectural novelties: (1) an asymmetric Bayesian Cross-Modal Priority Arbitration Engine ($\Pi$) with mathematically optimized reliability priors that dynamically resolves multi-sensory channel contention and preempts non-critical tasks during imminent collision hazards; (2) a Geodesic Micro-Hazard Pedestrian Routing model pairing sub-meter Haversine proximity calculations over OpenStreetMap vector topologies with an Adaptive Spatio-Temporal Cooldown filter ($\mathcal{T}_{\text{cd}}$) to vocalize distance-calibrated hazard warnings; (3) an Autoregressive 3D Skeletal Sign-to-Intent Sequence Decoder converting 21 spatial hand keypoints into continuous conversational sentences; (4) an Edge-Optimized Multi-Channel Emergency SOS Dispatcher synchronizing GPS geofencing across telephony, SMS, instant messaging, and SMTP protocols with offline clipboard failover; and (5) comprehensive model training and empirical weight-tuning protocols demonstrating convergence over training epochs across all neural backbones. SenseBridge is deployed entirely on commodity mobile devices using INT8-quantized ONNX and TensorFlow Lite runtimes. An empirical evaluation involving 165 sensory-impaired participants across 5,000+ interaction trials demonstrates an end-to-end safety fast-path response latency of $178\pm 24$~ms, an 8.4-fold suppression in sensory alert collisions, a 43.6\% reduction in NASA-TLX cognitive workload over disjoint tools, and an exceptional System Usability Scale (SUS) score of $84.2/100$.
+Worldwide, over a billion individuals experience severe physical, visual, hearing, or speech disabilities. In daily life, these individuals confront compounding environmental barriers that restrict independent mobility, environmental awareness, and spontaneous communication. Existing assistive technologies suffer from severe architectural fragmentation: users must continuously toggle between isolated single-purpose applications (e.g., standalone obstacle detectors, disconnected speech transcribers, basic sign translators), imposing prohibitive cognitive load, high battery drain, and lacking contextual arbitration. In this paper, we introduce \textit{SenseBridge}, a context-aware, multimodal edge-intelligence platform engineered to provide inclusive navigation, continuous communication, and proactive personal safety. SenseBridge introduces five primary architectural contributions: (1) an asymmetric Bayesian Cross-Modal Priority Arbitration Engine ($\Pi$) that dynamically resolves multi-sensory channel contention and preempts non-critical tasks during imminent physical hazards; (2) a Geodesic Micro-Hazard Pedestrian Routing model that computes sub-meter Haversine proximity over OpenStreetMap vector topologies and employs an Adaptive Spatio-Temporal Cooldown filter ($\mathcal{T}_{\text{cd}} = 16.0$~s) to deliver distance-calibrated spoken warnings without alert fatigue; (3) a Continuous Skeletal Sign-to-Intent Sequence Decoder converting 21 3D hand keypoints into complete conversational sentences; (4) an Edge-Optimized Multi-Channel Emergency SOS Dispatcher synchronizing GPS geofencing across telephony, SMS, instant messaging, and SMTP protocols with offline clipboard failover; and (5) rigorous neural training protocols and convergence analysis for all on-device perception backbones. Deployed entirely on commodity smartphone hardware using INT8-quantized ONNX and TensorFlow Lite runtimes, SenseBridge was evaluated in an empirical field study with 165 participants across 5,000+ interaction trials. The system demonstrated a safety fast-path response latency of $178\pm 24$~ms, an 8.4-fold suppression in sensory alert collisions, a 43.6\% reduction in NASA-TLX cognitive workload over disjoint applications, and an exceptional System Usability Scale (SUS) score of $84.2/100$.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -50,16 +50,16 @@ Assistive Technology, Multimodal Edge AI, Bayesian Priority Arbitration, Weight 
 % ================= INTRODUCTION =================
 \section{Introduction}
 
-Globally, more than 1.3 billion people experience significant physical, visual, hearing, or speech disabilities \cite{b1}. In everyday environments, individuals with sensory impairments face severe obstacles that impede independent mobility, environmental awareness, and spontaneous communication. For visually impaired individuals, dynamic obstacles, drop-offs, stairs, and missing signage create hazardous navigation conditions \cite{b3}. Concurrently, deaf and hard-of-hearing persons struggle in public spaces where critical information is delivered primarily via spoken announcements, while speech-impaired individuals encounter communication friction when interacting with non-signing individuals \cite{b9}.
+Worldwide, over a billion people suffer from severe physical, visual, hearing, or speech disabilities \cite{b1}. In everyday environments, people with sensory disabilities experience severe obstacles that impede independent mobility, environmental awareness, and the ability to communicate spontaneously. For visually impaired individuals, slopes, dynamic obstacles, drop-offs, stairs, and lacking signs frequently lead to unsafe navigation \cite{b3}. At the same time, people with hearing loss and deaf individuals experience major difficulties in public spaces where critical information is delivered predominantly through spoken announcements. Furthermore, speech-impaired individuals encounter persistent communication challenges when interacting with non-signing individuals \cite{b9}.
 
-Although recent advancements in deep learning have fostered various assistive tools, contemporary assistive technologies are crippled by a fundamental \textit{Architectural Trilemma}:
+Recent advances in deep learning have fostered various assistive tools. However, modern assistive technologies are paralyzed by a fundamental \textit{Architectural Trilemma}:
 \begin{enumerate}
-    \item \textbf{Modality Fragmentation and Disconnected UX:} Existing tools operate in silos. A visually impaired individual requiring outdoor mobility must run a GPS mapping application, a separate camera-based object detector, and a third document-reading OCR utility. A deaf or mute user must toggle between isolated speech-to-text transcribers and offline sign-language dictionaries. Switching between these uncoordinated applications induces severe cognitive overload, manual re-configuration, and high battery consumption \cite{b1,b7}.
-    \item \textbf{Absence of Contextual Cross-Modal Arbitration:} Standalone modules possess zero mutual contextual awareness. In high-risk scenarios (such as an approaching motor vehicle, a descending flight of stairs, or a curb drop), uncoordinated applications will continue to play mundane speech transcriptions or routine turn directions, completely masking life-critical obstacle warnings. Current systems lack dynamic priority arbitration between competing sensory channels.
-    \item \textbf{Macro-Navigation vs. Micro-Hazard Blindness:} Standard pedestrian routing systems calculate street-level routes along road polylines (e.g., ``Turn left onto Main Street'') but are completely oblivious to micro-level pedestrian hazards: stairs, bollards, uneven curbs, pedestrian crossings, traffic signals, and construction barriers. Without live, sub-meter geodesic proximity computation and distance-calibrated spoken warnings, visually impaired pedestrians remain susceptible to severe falls and collisions.
+    \item \textbf{Modality Fragmentation and Disconnected UX:} Existing tools work in isolation. A person who is blind or visually impaired requiring outdoor mobility must run a GPS mapping application, a standalone camera-based object detector, and a third OCR document reader. A deaf or mute user must toggle between isolated speech-to-text transcribers and offline sign language dictionaries. Switching between these uncoordinated applications induces severe cognitive load, manual re-configuration, and high battery consumption \cite{b1,b7}.
+    \item \textbf{Absence of Contextual Cross-Modal Arbitration:} Standalone modules possess no mutual contextual awareness. In high-risk situations (such as an approaching motor vehicle, descending stairs, or a curb drop), uncoordinated applications will continue to transcribe ordinary speech or announce routine turn directions, completely obscuring life-critical obstacle alerts. Current systems lack dynamic priority arbitration between competing sensory channels.
+    \item \textbf{Macro-Navigation vs. Micro-Hazard Blindness:} Standard pedestrian routing systems compute routes at the street level along road polylines (e.g., ``Turn left onto Main Street'') but are completely insensitive to micro-level walking hazards: stairs, bollards, uneven curbs, pedestrian crossings, traffic lights, and construction fencing. Without live sub-meter geodesic proximity computation and distance-calibrated spoken warnings, visually impaired pedestrians remain susceptible to severe falls and collisions.
 \end{enumerate}
 
-To overcome these structural limitations, we present \textbf{SenseBridge}, a context-aware, multimodal edge-intelligence platform designed for inclusive navigation, continuous communication, and proactive personal safety. SenseBridge unifies real-time object/depth detection (YOLOv8n), robust speech-to-text transcription (quantized Whisper), skeletal gesture tracking (MediaPipe + BiLSTM), scene text extraction (EasyOCR), and geodesic pedestrian hazard routing into an integrated, low-latency mobile architecture.
+To overcome these structural limitations, we propose \textbf{SenseBridge}, a context-aware, multimodal edge-intelligence platform designed for continuous navigation, predictive communication, and proactive personal safety. SenseBridge unifies real-time object and depth detection (YOLOv8n), robust speech-to-text transcription (quantized Whisper), skeletal gesture tracking (MediaPipe + BiLSTM), scene text extraction (EasyOCR), and geodesic pedestrian hazard routing into a low-latency mobile architecture.
 
 \begin{figure*}[!t]
 \centering
@@ -126,30 +126,30 @@ To overcome these structural limitations, we present \textbf{SenseBridge}, a con
 \label{fig:architecture_system}
 \end{figure*}
 
-The core technical contributions of this paper are:
+The main technical contributions of this paper are:
 \begin{itemize}
-    \item \textbf{Asymmetric Bayesian Priority Arbitration with Weight Optimization:} We formulate an asymmetric priority scheduling model that intercepts concurrent visual, acoustic, and gestural streams, calculates dynamic danger indices, optimizes empirical reliability priors ($w_m$) via Pareto multi-objective search, applies multi-source corroboration boosting, and preempts lower-priority queues during imminent physical danger.
-    \item \textbf{Geodesic Micro-Hazard Guidance with Spatio-Temporal Throttling:} We engineer a pedestrian navigation module that continuously computes sub-meter Haversine geodesic proximity to physical pathway landmarks (stairs, pedestrian crossings, traffic signals, curbs, drop-offs) and vocalizes distance-calibrated spoken warnings while enforcing an adaptive temporal cooldown filter ($\mathcal{T}_{\text{cd}} = 16.0$~s) to eliminate GPS-jitter alert fatigue.
-    \item \textbf{Continuous Skeletal Sign-to-Intent Sequence Decoder:} We implement an end-to-end framework that tracks 21 3D hand keypoints with Euclidean-invariant spatial normalization, classifies temporal gesture tokens via BiLSTM, and predicts natural conversational sentences through an autoregressive intention decoder.
+    \item \textbf{Asymmetric Bayesian Priority Arbitration with Weight Optimization:} We formulate an asymmetric priority scheduling model that coordinates concurrent visual, acoustic, and gestural streams, calculates dynamic danger indices, optimizes empirical reliability priors ($w_m$) via Pareto multi-objective search, and preempts lower-priority queues during imminent physical threats.
+    \item \textbf{Geodesic Micro-Hazard Guidance and Spatio-Temporal Throttling:} We engineer a pedestrian navigation module designed to continuously calculate sub-meter Haversine geodesic distance to physical waypoints (stairs, pedestrian crossings, traffic signals, curbs, drop-offs) and deliver distance-related verbal warnings while executing an adaptive temporal cooldown filter ($\mathcal{T}_{\text{cd}} = 16.0$~s) to prevent GPS-jitter alert fatigue.
+    \item \textbf{Continuous Skeletal Sign-to-Intent Sequence Decoder:} We implement an end-to-end framework tracking 21 3D hand keypoints with Euclidean-invariant spatial normalization, classifying temporal gesture tokens using BiLSTM, and formulating natural conversational sentences through an autoregressive intention decoder.
     \item \textbf{Rigorous Neural Training Protocols and Convergence Analysis:} We provide complete training specifications, learning schedules, loss functions, and empirical training/validation convergence curves for YOLOv8n obstacle detection and the BiLSTM sign classifier over training epochs.
-    \item \textbf{Edge-Optimized Multi-Channel Emergency SOS Dispatcher:} We design an automated emergency safety mechanism that captures fine GPS coordinates, sounds an acoustic oscillating siren, and triggers concurrent dispatches across cellular telephony, SMS, instant messaging, and SMTP protocols with automatic local clipboard failover.
-    \item \textbf{Extensive Empirical Validation:} We conduct an in-depth empirical study involving 165 participants across four distinct cohorts over 5,000+ real-world interaction trials, providing comprehensive ablation studies, cognitive workload (NASA-TLX) evaluations, latency profiles across edge runtimes, and system usability (SUS) benchmarks.
+    \item \textbf{Edge-Optimized Multi-Channel Emergency SOS Dispatcher:} We create an automatic emergency safety mechanism that captures fine GPS coordinates, sounds an acoustic oscillating siren, and triggers concurrent dispatches across cellular telephony, SMS, instant messaging, and SMTP protocols with automatic local clipboard failover.
+    \item \textbf{Field Evaluation Across Diverse Cohorts:} We present in-depth empirical research with 165 participants across four cohorts over 5,000+ real-world interaction trials, providing comprehensive ablation studies, NASA-TLX cognitive workload evaluations, latency profiles across edge runtimes, and system usability (SUS) benchmarks.
 \end{itemize}
 
 % ================= RELATED WORK =================
 \section{Related Work}
 
 \subsection{Computer Vision and Scene Perception for Low Vision}
-Assistive computer vision has progressed from classical edge-detection filters to modern Convolutional Neural Networks (CNNs) and Vision Transformers (ViTs) \cite{b2,b5}. Wearable systems such as Audo-Sight \cite{b4} and AI-Vision \cite{b9} demonstrate the potential of deep detectors (YOLO, Faster R-CNN) for obstacle avoidance. Agrawal et al. \cite{b10} developed ShelfHelp, a robotic cane using RGB-D sensing for indoor manipulation. However, these solutions remain either hardware-intensive or functionally detached from outdoor GIS pedestrian graphs, leaving users vulnerable to real-world infrastructure obstacles such as descending staircases or curb drop-offs.
+Assistive computer vision has progressed from classical edge detection filters to modern Convolutional Neural Networks (CNNs) and Vision Transformers (ViTs) \cite{b2,b5}. Wearable systems like Audo-Sight \cite{b4} and AI-Vision \cite{b9} show the capability of deep detectors (YOLO, Faster R-CNN) for obstacle avoidance. Agrawal et al. \cite{b10} developed ShelfHelp, a robotic cane capable of sensing surrounding geometry via RGB-D sensing. However, these solutions remain either hardware-intensive or functionally detached from outdoor GIS pedestrian graphs, leaving users vulnerable to real-world infrastructure hazards like descending staircases or curb drop-offs.
 
-\subsection{Speech Recognition and Multilingual Communication}
-Automatic Speech Recognition (ASR) foundation models such as Whisper \cite{b6} achieve remarkable transcription robustness across diverse acoustic conditions. Mach{\'a}{\v{c}}ek et al. \cite{b6} adapted Whisper for streaming transcription, demonstrating low-latency capabilities on server hardware. In mobile assistive contexts, however, running ASR concurrently with real-time video inference induces severe thermal throttling and battery drain. Existing assistive apps rely on cloud backends, which collapse entirely in subterranean transit hubs or low-connectivity environments.
+\subsection{Language Recognition and Multilingual Communication}
+Automatic Speech Recognition (ASR) foundation models such as Whisper \cite{b6} manage to transcribe with remarkable accuracy across diverse acoustic environments. Mach{\'a}{\v{c}}ek et al. \cite{b6} demonstrated that it is possible to adapt Whisper for streaming transcription on server hardware. In mobile assistive contexts, however, running ASR concurrently with real-time video inference results in severe thermal throttling and battery drain. Existing assistive applications rely heavily on cloud backends, which collapse completely in subterranean transit hubs or low-connectivity environments.
 
 \subsection{Sign Language Recognition and Conversational Synthesis}
-Sign Language Recognition (SLR) has transitioned from invasive sensory gloves to markerless computer vision. MediaPipe Hands \cite{b11} enables lightweight extraction of 21 3D skeletal landmarks. Recent architectures such as SLRNet \cite{b13} combine spatial keypoints with LSTMs or Temporal Convolutional Networks. Nevertheless, existing mobile SLR systems predominantly classify isolated, discrete tokens (e.g., single alphabets or static words) rather than performing continuous autoregressive synthesis of contextually complete natural conversational sentences.
+Sign Language Recognition (SLR) has evolved from invasive sensory gloves to markerless computer vision. MediaPipe Hands \cite{b11} allows lightweight extraction of 21 3D skeletal landmarks. Recent architectures like SLRNet \cite{b13} connect spatial keypoints to LSTMs or Temporal Convolutional Networks (TCNs). However, existing mobile SLR systems predominantly classify isolated, discrete tokens (e.g., single alphabets or static words) rather than performing contextually complete autoregressive synthesis of continuous conversational sentences.
 
 \subsection{Multimodal Assistive Systems and Research Taxonomy}
-Emerging research highlights the necessity of multimodal fusion to overcome single-modality blind spots. Hao et al. \cite{b3} investigated foundation vision-language models for spatial reasoning, while FusionSense \cite{b7} demonstrated runtime-adaptive edge learning. As summarized in Table~\ref{tab:sota_comparison}, existing solutions exhibit significant shortcomings in cross-modal priority arbitration, sub-meter micro-hazard guidance, and failsafe emergency dispatch. SenseBridge bridges these gaps through an integrated edge architecture.
+Recent studies highlight the critical need for multimodal sensor fusion to complement single-modality blind spots. Hao et al. \cite{b3} explored spatial reasoning for foundation vision-language models, while FusionSense \cite{b7} demonstrated runtime-adaptive edge learning. As presented in Table~\ref{tab:sota_comparison}, existing solutions show major limitations in cross-modal priority arbitration, sub-meter micro-hazard guidance, and failsafe emergency dispatch. SenseBridge fills these gaps through an integrated edge architecture.
 
 \begin{table*}[t]
 \caption{Systematic Benchmark: SenseBridge vs. State-of-the-Art Assistive Platforms}
@@ -174,56 +174,56 @@ Aura Foundation \cite{b8} & Vision / Audio & Cloud Infrastructure & Static Weigh
 % ================= SYSTEM ARCHITECTURE =================
 \section{System Architecture}
 
-SenseBridge is designed as a four-tier, edge-first architecture (Fig.~\ref{fig:architecture_system}):
+SenseBridge is built as a four-tier, edge-first architecture (Fig.~\ref{fig:architecture_system}):
 
 \subsection{Client Interaction \& Sensor Ingestion Layer}
-The frontend interface is implemented in React 18 and Vite, packaged as a cross-platform Android mobile application via Capacitor 6.0 native bridges. The interface adheres strictly to WCAG 2.2 Level AAA accessibility mandates:
+The frontend interface is developed with React 18 and Vite, packaged as a cross-platform Android mobile app through Capacitor 6.0 native bridges. The user interface strictly follows WCAG 2.2 Level AAA requirements:
 \begin{itemize}
-    \item High-contrast visual theming ($>7.5:1$ contrast ratio) with dynamic typography scaling ($18\text{pt}$ to $36\text{pt}$).
-    \item Generous tactile touch targets ($>56\times 56$~dp) and haptic confirmation on touch interactions.
-    \item Modality-specific operational views: Vision HUD (live object and depth bounding), Speech Console (real-time high-contrast captions), Gesture Viewfinder (hand tracking and predictive text), and Pedestrian Navigation HUD (vector map with live hazard telemetry).
+    \item High-contrast themes ($>7.5:1$ contrast ratio) with dynamic typography scaling ($18\text{pt}$--$36\text{pt}$).
+    \item Generous tactile touch targets ($>56\times 56$~dp) with haptic confirmation on touch interactions.
+    \item Modality-tailored operational views: Vision HUD (live object and depth bounding), Speech Console (real-time high-contrast captions), Gesture Viewfinder (hand tracking and predictive text), and Pedestrian Navigation HUD (vector map with live hazard telemetry).
 \end{itemize}
 
-\subsection{Context-Aware Multimodal Fusion Layer}
-The core arbitration layer manages sensory inputs from disparate sources to prevent cognitive overload. It maintains a rolling context buffer $\mathcal{B}$ tracking geographical position $(\phi, \lambda)$, pedestrian velocity $\mathbf{v}$, ambient noise level (dB), active application mode, and user sensory profile (blind, deaf, mute, multi-sensory).
+\subsection{Context-Aware Multimodal Fusion (CA-MF) Layer}
+The core arbitration layer regulates sensory inputs from disparate sources to avoid cognitive overload. It maintains a moving context buffer $\mathcal{B}$ tracking geographical position $(\phi, \lambda)$, pedestrian velocity $\mathbf{v}$, ambient noise level (dB), active application mode, and user sensory profile (blind, deaf, mute, multi-sensory).
 
 \subsection{Edge AI Processing Pipeline}
-All perception models run entirely on-device to eliminate cloud network latency, preserve user privacy, and ensure uninterrupted functionality in remote or subterranean environments:
+All perception models are executed entirely on-device to eliminate cloud network latency, guarantee user privacy, and ensure continuous operation without disruption in remote or subterranean environments:
 \begin{itemize}
     \item \textbf{YOLOv8n:} Real-time object and physical obstacle detection.
     \item \textbf{Whisper-Tiny:} Monaural multilingual speech-to-text transcription.
-    \item \textbf{MediaPipe + BiLSTM:} 21 3D hand landmark skeletal tracking and gesture token classification.
+    \item \textbf{MediaPipe + BiLSTM:} 21 3D hand landmark skeletal tracking and gesture token identification.
     \item \textbf{Predictive NLP Decoder:} Autoregressive sequence-to-sentence contextual formulation.
     \item \textbf{Haversine Micro-Router:} Real-time geodesic proximity computation over OpenStreetMap vector features.
 \end{itemize}
 
 \subsection{Multi-Channel Accessible Output Layer}
-Alerts and information are routed dynamically to the user's active sensory channels: synthesized spoken audio (Web Speech API / native TTS engine), directional tactile vibration sequences (Capacitor Haptics API), dynamic on-screen typography, and automated emergency payloads.
+Alerts and information are dynamically routed to the user's active sensory channels: synthesized spoken audio (Web Speech API / native TTS engine), directional tactile vibration sequences (Capacitor Haptics API), dynamic on-screen typography, and automated emergency payloads.
 
 % ================= THEORETICAL MODELING AND ALGORITHMS =================
 \section{Theoretical Modeling and Algorithmic Framework}
 
 \subsection{Asymmetric Bayesian Cross-Modal Priority Arbitration}
-Let $\mathcal{M} = \{\text{vision}, \text{speech}, \text{gesture}, \text{ocr}\}$ denote the active sensing modalities. At time step $t$, each modality $m \in \mathcal{M}$ generates a sensory signal $s$ characterized by an inference confidence score $c_m \in [0, 1]$ and an estimated spatial distance $d(s) \in \mathbb{R}^+$.
+Let $\mathcal{M} = \{\text{vision}, \text{speech}, \text{gesture}, \text{ocr}\}$ be the set of active sensing modalities. At time step $t$, each modality $m \in \mathcal{M}$ generates a sensory signal $s$ with inference confidence score $c_m \in [0, 1]$ and estimated spatial distance $d(s) \in \mathbb{R}^+$.
 
-To account for inherent sensor noise and operational variance, we assign empirical reliability priors $w_m$. The distance-attenuation kernel $\kappa(s)$ is modeled as an exponential decay function:
+To compensate for inherent sensor noise and operational variance, we employ empirical reliability priors $w_m$. The distance-attenuation kernel $\kappa(s)$ is modeled as an exponentially decaying function:
 \begin{equation}
 \kappa(s) = \exp\left(-\frac{d(s)}{d_{\text{norm}}}\right), \quad d_{\text{norm}} = 5.0\text{ m}
 \label{eq:decay}
 \end{equation}
-The fused severity score $S_{\text{fused}}(s)$ is computed by:
+The fused severity score $S_{\text{fused}}(s)$ is calculated as:
 \begin{equation}
 S_{\text{fused}}(s) = w_m \cdot c_m \cdot \kappa(s) + \beta_{\text{corr}} \cdot \mathbf{1}_{\{|\mathcal{M}_{\text{agree}}| \ge 2\}}
 \label{eq:fused}
 \end{equation}
 where $\beta_{\text{corr}} = 0.15$ is a multi-source corroboration boost awarded when independent modalities (e.g., camera vision and GPS landmark database) corroborate the presence of the same physical hazard.
 
-The global priority score $\mathcal{P}(s)$ is evaluated as:
+The global priority score $\mathcal{P}(s)$ is assessed as:
 \begin{equation}
 \mathcal{P}(s) = \gamma_{\text{danger}}(s) \cdot \frac{1}{\max(d(s), \epsilon)} \cdot S_{\text{fused}}(s)
 \label{eq:priority_metric}
 \end{equation}
-where $\gamma_{\text{danger}}(s)$ denotes the intrinsic entity hazard weight (e.g., motor vehicle: 3.5, staircase: 2.8, drop-off: 3.0, pedestrian crossing: 1.5, furniture: 1.0), and $\epsilon = 0.1$~m prevents division-by-zero singularities.
+where $\gamma_{\text{danger}}(s)$ is the intrinsic entity hazard weight (e.g., motor vehicle: 3.5, staircase: 2.8, drop-off: 3.0, pedestrian crossing: 1.5, furniture: 1.0), and $\epsilon = 0.1$~m prevents division-by-zero singularities.
 
 \begin{algorithm}[t]
 \caption{Bayesian Priority Arbitration \& Preemption Pipeline}
@@ -256,7 +256,7 @@ where $\gamma_{\text{danger}}(s)$ denotes the intrinsic entity hazard weight (e.
 \end{algorithm}
 
 \subsection{Empirical Optimization of Modality Reliability Weights}
-A key technical question is how to optimally select the reliability prior vector $\mathbf{w} = (w_{\text{vision}}, w_{\text{speech}}, w_{\text{gesture}}, w_{\text{ocr}})$. If vision is over-weighted, spurious shadows or motion blur cause false panic alarms; if under-weighted, life-critical obstacles are ignored.
+A critical technical challenge is how to best choose the reliability prior vector $\mathbf{w} = (w_{\text{vision}}, w_{\text{speech}}, w_{\text{gesture}}, w_{\text{ocr}})$. If vision is over-weighted, spurious shadows or motion blur give false alarms; if under-weighted, life-critical obstacles are ignored.
 
 We formulate reliability weight selection as a multi-objective Pareto optimization problem over a validation corpus $\mathcal{D}_{\text{val}}$ of 1,200 multi-sensory conflict scenarios:
 \begin{equation}
@@ -288,7 +288,7 @@ As documented in Table~\ref{tab:weight_candidates}, the proposed empirical weigh
 \subsection{Geodesic Micro-Hazard Proximity Guidance}
 Standard pedestrian navigation algorithms operate on macroscopic street polylines. SenseBridge queries local OpenStreetMap vector nodes representing micro-hazards $\mathcal{N}_{\text{haz}} = \{\text{steps}, \text{crossing}, \text{traffic\_signals}, \text{kerb}, \text{construction}, \text{drop}\}$.
 
-Let $(\phi_u, \lambda_u)$ denote the user's current GPS coordinates and $(\phi_l, \lambda_l)$ represent the target hazard coordinates. The central angular distance $\Delta\sigma$ is calculated using the Haversine equation:
+Let $(\phi_u, \lambda_u)$ denote the user's current GPS location and $(\phi_l, \lambda_l)$ represent the target hazard coordinates. The central angular distance $\Delta\sigma$ is calculated using the Haversine equation:
 \begin{equation}
 \Delta\sigma = 2\arcsin\left(\sqrt{\sin^2\left(\frac{\Delta\phi}{2}\right) + \cos\phi_u \cos\phi_l \sin^2\left(\frac{\Delta\lambda}{2}\right)}\right)
 \label{eq:haversine_formula}
@@ -335,7 +335,7 @@ To guarantee execution on commodity mobile chipsets without thermal throttling, 
 q = \text{round}\left(\frac{r}{S}\right) + Z, \quad S = \frac{r_{\max} - r_{\min}}{q_{\max} - q_{\min}}
 \label{eq:quantization}
 \end{equation}
-where $S$ is the scale factor and $Z$ is the zero-point integer offset. As detailed in Section~VI, INT8 quantization compresses the YOLOv8n footprint by 75.9\% and Whisper-Tiny by 74.0\% with negligible accuracy degradation.
+where $S$ is the scale factor and $Z$ is the zero-point integer offset. Quantization compresses the YOLOv8n footprint by 75.9\% and Whisper-Tiny by 74.0\% with negligible accuracy degradation.
 
 % ================= MODEL TRAINING AND CONVERGENCE =================
 \section{Model Training Protocols and Convergence Analysis}
@@ -675,11 +675,11 @@ As shown in Fig.~\ref{fig:nasa_tlx_full}, SenseBridge achieved an aggregate work
 % ================= REAL-WORLD CHALLENGES AND MITIGATIONS =================
 \section{Real-World Challenges and Mitigations}
 
-Field deployments revealed three primary operational edge cases:
+During field deployments, three primary operational challenges were discovered:
 \begin{enumerate}
     \item \textbf{GPS Multipath Drift in Urban Canyons:} Multi-story concrete buildings induce GPS positioning errors exceeding $\pm 18$~m. To maintain accurate micro-hazard alerts, SenseBridge integrates high-frequency device pedometer step counts and compass heading dead-reckoning to cross-verify geodesic landmark distances.
-    \item \textbf{Acoustic Echo and Hallucination in Public Transit:} High reverberation in train stations caused Whisper hallucinations. We resolved this by integrating WebRTC Automatic Gain Control (AGC) and client-side spectral noise subtraction before passing audio frames to the ASR model.
-    \item \textbf{Rapid Hand Occlusion in Continuous SLR:} Fast signing in complex backgrounds degraded landmark extraction. SenseBridge applies temporal Kalman filtering over the 21 3D hand keypoints, ensuring stable sequence inputs to the BiLSTM decoder even during brief occlusions.
+    \item \textbf{Acoustic Echo and Hallucination in Public Transit:} High reverberation in train stations caused Whisper hallucinations. To solve this, we integrated WebRTC Automatic Gain Control (AGC) and client-side spectral noise subtraction to remove noise from audio frames prior to passing them to the ASR model.
+    \item \textbf{Continuous SLR with Rapid Hand Occlusion:} Fast signing in complex backgrounds degraded landmark extraction. SenseBridge applies a temporal Kalman filter across the 21 3D hand keypoints to ensure stability and smooth sequential inputs to the BiLSTM decoder even during brief occlusions.
 \end{enumerate}
 
 % ================= CONCLUSION AND FUTURE WORK =================
