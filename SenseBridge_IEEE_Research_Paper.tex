@@ -260,7 +260,10 @@ A critical technical challenge is how to best choose the reliability prior vecto
 
 We formulate reliability weight selection as a multi-objective Pareto optimization problem over a validation corpus $\mathcal{D}_{\text{val}}$ of 1,200 multi-sensory conflict scenarios:
 \begin{equation}
-\mathbf{w}^* = \arg\min_{\mathbf{w} \in [0.5, 1.0]^4} \sum_{i=1}^{|\mathcal{D}_{\text{val}}|} \left[ \lambda_1 \mathcal{L}_{\text{conflict}}(y_i, \hat{y}_i(\mathbf{w})) + \lambda_2 \mathcal{L}_{\text{missed}}(y_i, \hat{y}_i(\mathbf{w})) \right]
+\begin{aligned}
+\mathbf{w}^* = \arg\min_{\mathbf{w} \in [0.5, 1.0]^4} \sum_{i=1}^{|\mathcal{D}_{\text{val}}|} & \Big[ \lambda_1 \mathcal{L}_{\text{conflict}}(y_i, \hat{y}_i(\mathbf{w})) \\
+& + \lambda_2 \mathcal{L}_{\text{missed}}(y_i, \hat{y}_i(\mathbf{w})) \Big]
+\end{aligned}
 \label{eq:weight_opt}
 \end{equation}
 where $\mathcal{L}_{\text{conflict}}$ penalizes uncoordinated audio overlaps, $\mathcal{L}_{\text{missed}}$ penalizes failure to preempt for critical hazards, and $\lambda_1 = 0.4, \lambda_2 = 0.6$.
@@ -290,7 +293,7 @@ Standard pedestrian navigation algorithms operate on macroscopic street polyline
 
 Let $(\phi_u, \lambda_u)$ denote the user's current GPS location and $(\phi_l, \lambda_l)$ represent the target hazard coordinates. The central angular distance $\Delta\sigma$ is calculated using the Haversine equation:
 \begin{equation}
-\Delta\sigma = 2\arcsin\left(\sqrt{\sin^2\left(\frac{\Delta\phi}{2}\right) + \cos\phi_u \cos\phi_l \sin^2\left(\frac{\Delta\lambda}{2}\right)}\right)
+\Delta\sigma = 2\arcsin\left(\sqrt{\sin^2(\Delta\phi/2) + \cos\phi_u \cos\phi_l \sin^2(\Delta\lambda/2)}\right)
 \label{eq:haversine_formula}
 \end{equation}
 The geodesic ground distance is $d_{\text{geo}} = R_{\text{earth}} \cdot \Delta\sigma$, where $R_{\text{earth}} = 6,371,000$~m.
@@ -306,12 +309,13 @@ where $f$ is camera focal length, $H_{\text{real}}$ is canonical physical height
 \begin{equation}
 \mathcal{A}_{\text{emit}}(l, t) = 
 \begin{cases}
-1 (\text{Emit Spoken Alert}), & \text{if } (t - t_{\text{last}}(l) > \tau_{\text{cd}}) \lor \left(\frac{\Delta d}{\Delta t} < -v_{\text{crit}}\right) \\
-0 (\text{Suppress Audio}), & \text{otherwise}
+1, & \text{if } (t - t_{\text{last}}(l) > \tau_{\text{cd}}) \ \lor \\
+   & \quad (\Delta d / \Delta t < -v_{\text{crit}}) \\
+0, & \text{otherwise}
 \end{cases}
 \label{eq:throttling_filter}
 \end{equation}
-where $\tau_{\text{cd}} = 16.0$~s is baseline landmark cooldown, and $v_{\text{crit}} = 1.8$~m/s represents rapid approach override.
+where state 1 triggers an emitted spoken warning and 0 denotes suppression, $\tau_{\text{cd}} = 16.0$~s is baseline landmark cooldown, and $v_{\text{crit}} = 1.8$~m/s represents rapid approach override.
 
 \subsection{Skeletal Sign-to-Intent Sequence Decoder}
 Hand tracking isolates 21 discrete 3D skeletal landmarks $K = \{k_i = (x_i, y_i, z_i)\}_{i=1}^{21}$ per frame via MediaPipe. We apply translation- and scale-invariant Euclidean normalization:
@@ -332,7 +336,7 @@ This translates sparse gesture tokens (e.g., $[\text{Need}], [\text{Medicine}]$)
 \subsection{Edge Model Compression and INT8 Quantization}
 To guarantee execution on commodity mobile chipsets without thermal throttling, model weights $W$ and activations $X$ are quantized from 32-bit floating-point (FP32) to signed 8-bit integers (INT8):
 \begin{equation}
-q = \text{round}\left(\frac{r}{S}\right) + Z, \quad S = \frac{r_{\max} - r_{\min}}{q_{\max} - q_{\min}}
+q = \text{round}(r / S) + Z, \quad S = \frac{r_{\max} - r_{\min}}{q_{\max} - q_{\min}}
 \label{eq:quantization}
 \end{equation}
 where $S$ is the scale factor and $Z$ is the zero-point integer offset. Quantization compresses the YOLOv8n footprint by 75.9\% and Whisper-Tiny by 74.0\% with negligible accuracy degradation.
