@@ -30,13 +30,9 @@
 \IEEEauthorblockN{Mrs Lalitha$^{*}$, P. Subha Dhanush$^{\dagger}$, P. Somu$^{\ddagger}$, K. Tejaswini$^{\S}$, G. Rohan Chowdary$^{\P}$}
 \IEEEauthorblockA{
 Department of CSE - (CyS, DS) and AI\&DS \\
-VNR Vignana Jyothi Institute of Engineering and Technology \\
-Hyderabad, India \\
-$^{*}$lalitha\_e@vnrvjiet.in,
-$^{\dagger}$subhadhanushpasala@gmail.com,
-$^{\ddagger}$somupalasa1408@gmail.com,
-$^{\S}$katamonitejaswini@gmail.com,
-$^{\P}$rohanchowdary2468@gmail.com
+VNR Vignana Jyothi Institute of Engineering and Technology, Hyderabad, India \\
+$^{*}$lalitha\_e@vnrvjiet.in, $^{\dagger}$subhadhanushpasala@gmail.com, $^{\ddagger}$somupalasa1408@gmail.com, \\
+$^{\S}$katamonitejaswini@gmail.com, $^{\P}$rohanchowdary2468@gmail.com
 }
 }
 
@@ -67,6 +63,7 @@ To overcome these structural limitations, we present \textbf{SenseBridge}, a con
 
 \begin{figure*}[!t]
 \centering
+\resizebox{0.95\textwidth}{!}{
 \begin{tikzpicture}[
     scale=0.92,
     every node/.style={transform shape},
@@ -124,6 +121,7 @@ To overcome these structural limitations, we present \textbf{SenseBridge}, a con
 \draw[flowarrow] (e4.south) -- (o4.north);
 
 \end{tikzpicture}
+}
 \caption{SenseBridge Tiered System Architecture: Unifying client sensor ingestion, Bayesian priority arbitration, edge neural pipelines, and multi-channel accessible output into a cohesive, sub-200ms processing loop.}
 \label{fig:architecture_system}
 \end{figure*}
@@ -157,8 +155,7 @@ Emerging research highlights the necessity of multimodal fusion to overcome sing
 \caption{Systematic Benchmark: SenseBridge vs. State-of-the-Art Assistive Platforms}
 \label{tab:sota_comparison}
 \centering
-\scriptsize
-\setlength{\tabcolsep}{5pt}
+\resizebox{\textwidth}{!}{
 \begin{tabular}{lcccccccl}
 \toprule
 \textbf{System / Platform} & \textbf{Sensory Coverage} & \textbf{Compute Target} & \textbf{Priority Arbitration} & \textbf{Micro-Hazard Distance} & \textbf{Sign Interpretation} & \textbf{Emergency Dispatch} & \textbf{Fast-Path Latency} & \textbf{Architectural Limitation} \\
@@ -171,6 +168,7 @@ Aura Foundation \cite{b8} & Vision / Audio & Cloud Infrastructure & Static Weigh
 \textbf{SenseBridge (Ours)} & \textbf{Vision+Audio+Gesture+Geo} & \textbf{Mobile Edge (INT8)} & \textbf{Bayesian Dynamic ($\Pi$)} & \textbf{Sub-Meter Geodesic} & \textbf{Predictive Sentence} & \textbf{5-Way Sync + Local} & \textbf{150--210 ms} & \textbf{Fully integrated commodity edge system} \\
 \bottomrule
 \end{tabular}
+}
 \end{table*}
 
 % ================= SYSTEM ARCHITECTURE =================
@@ -271,18 +269,18 @@ where $\mathcal{L}_{\text{conflict}}$ penalizes uncoordinated audio overlaps, $\
 \caption{Empirical Benchmark of Weight Configurations on Conflict Scenarios}
 \label{tab:weight_candidates}
 \centering
-\small
-\setlength{\tabcolsep}{3pt}
+\resizebox{\columnwidth}{!}{
 \begin{tabular}{lcccc}
 \toprule
-\textbf{Weighting Strategy} & \textbf{Weight Vector $\mathbf{w}$} & \textbf{Conflict Rate} & \textbf{Missed Risk} & \textbf{Pareto Rank} \\
+\textbf{Weight Strategy} & \textbf{Weight Vector $\mathbf{w}$} & \textbf{Conflict} & \textbf{Missed} & \textbf{Rank} \\
 \midrule
 Uniform Weights & $(0.25, 0.25, 0.25, 0.25)$ & 14.8\% & 11.2\% & 4 \\
 Static Unit Weights & $(1.00, 1.00, 1.00, 1.00)$ & 9.4\% & 7.6\% & 3 \\
 Inverse Variance & $(0.92, 0.74, 0.71, 0.58)$ & 3.2\% & 2.4\% & 2 \\
-\textbf{Proposed Empirical} & $\mathbf{(1.00, 0.85, 0.80, 0.65)}$ & \textbf{1.2\%} & \textbf{0.8\%} & \textbf{1 (Optimal)} \\
+\textbf{Proposed Empirical} & $\mathbf{(1.00, 0.85, 0.80, 0.65)}$ & \textbf{1.2\%} & \textbf{0.8\%} & \textbf{1 (Best)} \\
 \bottomrule
 \end{tabular}
+}
 \end{table}
 
 As documented in Table~\ref{tab:weight_candidates}, the proposed empirical weights $(1.00, 0.85, 0.80, 0.65)$ achieve the global minimum across both sensory alert collisions ($1.2\%$) and life-safety hazard misses ($0.8\%$).
@@ -354,6 +352,7 @@ The visual obstacle detector was initialized with pretrained COCO weights and fi
 
 \begin{figure}[htbp]
 \centering
+\resizebox{\columnwidth}{!}{
 \begin{tikzpicture}
 \begin{axis}[
     width=\columnwidth,
@@ -385,6 +384,7 @@ The visual obstacle detector was initialized with pretrained COCO weights and fi
 \legend{mAP@0.5 (\%), Box Loss ($\times 40$), Class Loss ($\times 40$)}
 \end{axis}
 \end{tikzpicture}
+}
 \caption{Empirical convergence of YOLOv8n fine-tuning across 100 epochs, showing rapid stabilization of bounding-box regression and class loss.}
 \label{fig:yolo_train}
 \end{figure}
@@ -403,6 +403,7 @@ The gesture classifier was trained on 4,200 continuous sequences captured across
 
 \begin{figure}[htbp]
 \centering
+\resizebox{\columnwidth}{!}{
 \begin{tikzpicture}
 \begin{axis}[
     width=\columnwidth,
@@ -434,6 +435,7 @@ The gesture classifier was trained on 4,200 continuous sequences captured across
 \legend{Train Accuracy (\%), Val Accuracy (\%), Val Loss ($\times 30$)}
 \end{axis}
 \end{tikzpicture}
+}
 \caption{BiLSTM sign classification training vs. validation accuracy and categorical cross-entropy loss over 80 epochs.}
 \label{fig:lstm_train}
 \end{figure}
@@ -461,20 +463,20 @@ Table~\ref{tab:benchmarks_full} presents benchmark evaluations of the individual
 \caption{Module-Level Analytical Accuracy, Memory Footprint, and Latency}
 \label{tab:benchmarks_full}
 \centering
-\small
-\setlength{\tabcolsep}{4pt}
+\resizebox{\columnwidth}{!}{
 \begin{tabular}{lcccc}
 \toprule
-\textbf{Perception Engine} & \textbf{Evaluation Metric} & \textbf{Accuracy} & \textbf{Footprint} & \textbf{Edge Latency} \\
+\textbf{Perception Engine} & \textbf{Metric} & \textbf{Accuracy} & \textbf{Size} & \textbf{Latency} \\
 \midrule
-YOLOv8n (Obstacles) & mAP@0.5 (COCO) & 78.4\% & 6.3 MB & $28\pm 4$ ms \\
-Whisper-Tiny (ASR) & Word Error Rate & 12.6\% & 39.4 MB & $840\pm 92$ ms \\
-MediaPipe + BiLSTM & Top-1 Accuracy & 82.1\% & 4.2 MB & $32\pm 5$ ms \\
-Predictive NLP Decoder & BLEU-4 Score & 74.8 & 8.6 MB & $45\pm 6$ ms \\
-EasyOCR (Scene Text) & Char Error Rate & 11.2\% & 14.1 MB & $1120\pm 140$ ms \\
-Haversine Router ($\Pi$) & Proximity Precision & 96.2\% & 0.4 MB & $6\pm 1$ ms \\
+YOLOv8n (Obstacles) & mAP@0.5 & 78.4\% & 6.3 MB & $28\pm 4$ ms \\
+Whisper-Tiny (ASR) & WER & 12.6\% & 39.4 MB & $840\pm 92$ ms \\
+MediaPipe + BiLSTM & Top-1 Acc. & 82.1\% & 4.2 MB & $32\pm 5$ ms \\
+Predictive NLP Decoder & BLEU-4 & 74.8 & 8.6 MB & $45\pm 6$ ms \\
+EasyOCR (Scene Text) & CER & 11.2\% & 14.1 MB & $1120\pm 140$ ms \\
+Haversine Router ($\Pi$) & Precision & 96.2\% & 0.4 MB & $6\pm 1$ ms \\
 \bottomrule
 \end{tabular}
+}
 \end{table}
 
 \subsection{End-to-End Processing Latency Profile}
@@ -482,6 +484,7 @@ Fig.~\ref{fig:latency_bench} illustrates the empirical latency decomposition acr
 
 \begin{figure}[htbp]
 \centering
+\resizebox{\columnwidth}{!}{
 \begin{tikzpicture}
 \begin{axis}[
     ybar,
@@ -514,6 +517,7 @@ Fig.~\ref{fig:latency_bench} illustrates the empirical latency decomposition acr
 };
 \end{axis}
 \end{tikzpicture}
+}
 \caption{End-to-end processing latency profile across safety-critical and event-triggered processing pathways on commodity smartphone hardware.}
 \label{fig:latency_bench}
 \end{figure}
@@ -523,6 +527,7 @@ Environmental lighting drastically influences camera-based perception. We evalua
 
 \begin{figure}[htbp]
 \centering
+\resizebox{\columnwidth}{!}{
 \begin{tikzpicture}
 \begin{axis}[
     width=\columnwidth,
@@ -554,6 +559,7 @@ Environmental lighting drastically influences camera-based perception. We evalua
 \legend{Base Camera Feed, Auto-Torch Enabled}
 \end{axis}
 \end{tikzpicture}
+}
 \caption{Visual detection performance under varying ambient illuminance, demonstrating robustness with automated hardware illumination assistance.}
 \label{fig:lighting_perf}
 \end{figure}
@@ -563,6 +569,7 @@ In public transit hubs, ambient noise impairs ASR transcription. We evaluated Wh
 
 \begin{figure}[htbp]
 \centering
+\resizebox{\columnwidth}{!}{
 \begin{tikzpicture}
 \begin{axis}[
     width=\columnwidth,
@@ -591,6 +598,7 @@ In public transit hubs, ambient noise impairs ASR transcription. We evaluated Wh
 \legend{Raw Audio Feed, Spectral Gating + AGC}
 \end{axis}
 \end{tikzpicture}
+}
 \caption{Transcription Word Error Rate (WER) across varying acoustic signal-to-noise ratios (SNR), lower is superior.}
 \label{fig:snr_wer}
 \end{figure}
@@ -610,11 +618,10 @@ As shown in Table~\ref{tab:ablation_study}, disabling priority arbitration (Conf
 \caption{Ablation Study: Sensory Conflicts, Alert Density, and Reaction Latency}
 \label{tab:ablation_study}
 \centering
-\small
-\setlength{\tabcolsep}{3.5pt}
+\resizebox{\columnwidth}{!}{
 \begin{tabular}{lcccc}
 \toprule
-\textbf{Ablation Setting} & \textbf{Alert Conflicts/hr} & \textbf{Alerts / km} & \textbf{Reaction Time} & \textbf{Missed Hazards} \\
+\textbf{Ablation Setting} & \textbf{Conflicts/hr} & \textbf{Alerts/km} & \textbf{Reaction} & \textbf{Missed} \\
 \midrule
 Config A (SenseBridge) & \textbf{1.2} & \textbf{2.1} & \textbf{0.38 s} & \textbf{0.8\%} \\
 Config B (w/o $\mathcal{T}_{\text{cd}}$) & 2.4 & 31.4 & 0.44 s & 1.2\% \\
@@ -622,6 +629,7 @@ Config C (w/o $\Pi$) & 10.1 & 4.6 & 0.92 s & 9.4\% \\
 Config D (Disjoint Apps) & 24.8 & 38.2 & 1.48 s & 18.6\% \\
 \bottomrule
 \end{tabular}
+}
 \end{table}
 
 \subsection{Cognitive Workload (NASA-TLX) and Usability (SUS)}
@@ -631,6 +639,7 @@ As shown in Fig.~\ref{fig:nasa_tlx_full}, SenseBridge achieved an aggregate work
 
 \begin{figure}[htbp]
 \centering
+\resizebox{\columnwidth}{!}{
 \begin{tikzpicture}
 \begin{axis}[
     xbar,
@@ -658,6 +667,7 @@ As shown in Fig.~\ref{fig:nasa_tlx_full}, SenseBridge achieved an aggregate work
 \legend{Disjoint Apps, SenseBridge (Unified)}
 \end{axis}
 \end{tikzpicture}
+}
 \caption{NASA-TLX cognitive workload comparison between disjoint assistive tools and the unified SenseBridge platform across 165 participants.}
 \label{fig:nasa_tlx_full}
 \end{figure}
