@@ -42,44 +42,52 @@ const OBSTACLE_CLASSES = new Set([
 const MOVING_CLASSES = new Set(['person','bicycle','car','motorcycle','bus','truck','dog','cat','horse']);
 
 const estimateDistance = (pctBbox) => {
-    const a = pctBbox[2] * pctBbox[3];
-    if (a > 900 || pctBbox[2] > 30) return 'close';
-    if (a > 200 || pctBbox[2] > 12) return 'medium';
+    if (!pctBbox) return 'medium';
+    const w = pctBbox[2] || 0;
+    const h = pctBbox[3] || 0;
+    const a = w * h;
+    // Bbox area > 160 or width > 15% or height > 22% is within ~1.2m
+    if (a > 160 || w > 15 || h > 22) return 'close';
+    // Bbox area > 20 or width > 4% or height > 6% is within ~2.5m
+    if (a > 20 || w > 4 || h > 6) return 'medium';
     return 'far';
 };
 const getDirection = (pctBbox) => {
-    const cx = pctBbox[0] + pctBbox[2] / 2;
-    return cx < 33 ? 'left' : cx > 67 ? 'right' : 'ahead';
+    if (!pctBbox) return 'ahead';
+    const cx = pctBbox[0] + (pctBbox[2] || 0) / 2;
+    return cx < 35 ? 'left' : cx > 65 ? 'right' : 'ahead';
 };
 
 const DIST_COLOR = { close: '#F43F5E', medium: '#F59E0B', far: '#10B981' };
-const DIST_METERS = { close: '0.5m', medium: '1.5m', far: '3.0m' };
+const DIST_METERS = { close: '0.8m', medium: '1.8m', far: '3.2m' };
 const HAZARD_CFG = {
     stair:{ label:'Staircase Ahead', color:'#F59E0B', msg:'Warning: Stairs ahead. Slow down.' },
     drop: { label:'Drop Edge Ahead', color:'#F43F5E', msg:'Warning: Potential drop ahead. Stop!' },
     slope:{ label:'Incline Ahead',   color:'#6366F1', msg:'Incline detected ahead.' },
 };
 
-const canSpeak = (key, ms = 5000, confidence = 0.8) => {
-    return _temporalFilter.shouldAnnounce(key, confidence, 'vision');
-};
-
-// Low-latency warning beep using Web Audio API
+// Low-latency warning beep using Web Audio API with AudioContext recovery
+let _visionAudioCtx = null;
 const playBeep = (freq = 880, duration = 150) => {
     try {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         if (!AudioContext) return;
-        const ctx = new AudioContext();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(freq, ctx.currentTime);
-        gain.gain.setValueAtTime(0.05, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration / 1000);
+        if (!_visionAudioCtx || _visionAudioCtx.state === 'closed') {
+            _visionAudioCtx = new AudioContext();
+        }
+        if (_visionAudioCtx.state === 'suspended') {
+            _visionAudioCtx.resume().catch(() => {});
+        }
+        const osc = _visionAudioCtx.createOscillator();
+        const gain = _visionAudioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, _visionAudioCtx.currentTime);
+        gain.gain.setValueAtTime(0.08, _visionAudioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, _visionAudioCtx.currentTime + duration / 1000);
         osc.connect(gain);
-        gain.connect(ctx.destination);
+        gain.connect(_visionAudioCtx.destination);
         osc.start();
-        osc.stop(ctx.currentTime + duration / 1000);
+        osc.stop(_visionAudioCtx.currentTime + duration / 1000);
     } catch(e) {}
 };
 
@@ -113,7 +121,7 @@ const getNearestMeters = (obstacles) => {
 const VisionAssistPage = () => {
     const navigate = useNavigate();
     const location = useLocation();
-    const [active,      setActive]      = useState(location.state?.autoStart || false);
+    const [active,      setActive]      = useState(location.state?.autoStart || location.state?.mode === 'navigation' || location.state?.mode === 'ocr' || true);
     const [obstacles,   setObstacles]   = useState([]);
     const [hazard,      setHazard]      = useState(null);
     const [alerts,      setAlerts]      = useState([]);
@@ -138,14 +146,40 @@ const VisionAssistPage = () => {
     const [showAIDetails, setShowAIDetails] = useState(() => getConfig().ui?.showAIDetails ?? false);
     const [lastLatencyMs, setLastLatencyMs] = useState(0);
 
-    const videoRef      = useRef(null);
-    const canvasRef     = useRef(null);
-    const streamRef     = useRef(null);
-    const trackerRef    = useRef(new ObstacleTracker());
-    const matcherRef    = useRef(null);
-    const frameRef      = useRef(0);
-    const speakTimer    = useRef(null);
-    const ocrWorkerRef  = useRef(null);  // persistent Tesseract worker
+    const videoRef           = useRef(null);
+    const canvasRef          = useRef(null);
+    const streamRef          = useRef(null);
+    const trackerRef         = useRef(new ObstacleTracker());
+    const matcherRef         = useRef(null);
+    const frameRef           = useRef(0);
+    const speakTimer         = useRef(null);
+    const ocrWorkerRef       = useRef(null);  // persistent Tesseract worker
+    const lastVisionAlertsRef= useRef(new Map()); // key -> { time, dist, steer }
+
+    // Implements Eq. (7) Adaptive Spatio-Temporal Throttling Filter:
+    // A_emit(l,t) = 1 if (t - t_last(l) > tau_cd) OR (Delta d / Delta t < -v_crit)
+    // where tau_cd = 16.0s for static landmarks, 3.5s for dynamic steering, 2.0s for urgent/rapid
+    const shouldEmitVisionAlert = useCallback((key, currentDistMeters, isUrgent, steer) => {
+        const now = Date.now();
+        const prev = lastVisionAlertsRef.current.get(key);
+        if (!prev) {
+            lastVisionAlertsRef.current.set(key, { time: now, dist: currentDistMeters, steer });
+            return true;
+        }
+
+        const dtSeconds = (now - prev.time) / 1000;
+        const deltaD = currentDistMeters - prev.dist;
+        const approachVelocity = dtSeconds > 0 ? -(deltaD / dtSeconds) : 0;
+        const rapidApproach = approachVelocity >= 1.8; // v_crit = 1.8 m/s
+        const steerChanged = steer && prev.steer && steer !== prev.steer;
+        const cooldown = isUrgent ? 2.0 : 3.5;
+
+        if (dtSeconds >= cooldown || rapidApproach || steerChanged) {
+            lastVisionAlertsRef.current.set(key, { time: now, dist: currentDistMeters, steer });
+            return true;
+        }
+        return false;
+    }, []);
 
     useEffect(() => {
         const onStart = () => setActive(true);
@@ -180,9 +214,9 @@ const VisionAssistPage = () => {
         clearTimeout(speakTimer.current);
         setSpeaking(true);
         setCurAlert(text);
-        // Do NOT call cancelSpeech() here — let SpeechQueue serialize and prioritize smoothly
-        speak(text, { priority: urgent ? 'high' : 'normal', rate: urgent ? 1.08 : 1.0 });
-        speakTimer.current = setTimeout(() => setSpeaking(false), Math.max(2000, text.length * 70));
+        // SpeechQueue serializes delivery and preempts for critical alerts
+        speak(text, { priority: urgent ? 'critical' : 'high', rate: urgent ? 1.08 : 1.0 });
+        speakTimer.current = setTimeout(() => setSpeaking(false), Math.max(2500, text.length * 75));
     }, []);
 
     const addAlert = useCallback((msg, urgent = false) => {
@@ -212,139 +246,154 @@ const VisionAssistPage = () => {
                 const vid = videoRef.current;
                 if (!vid) return;
                 vid.srcObject = stream;
-                vid.onloadedmetadata = async () => {
-                    vid.play();
+
+                const initDetection = async () => {
+                    try { await vid.play(); } catch {}
                     if (knownFaces.length && !faceReady) await ensureFaceModels();
-                    setTimeout(async () => {
-                        stopFn = await startObjectDetection(vid, async (result) => {
-                            const W = vid.videoWidth || 640;
-                            const H = vid.videoHeight || 480;
-                            frameRef.current++;
-                            const obs = result.detections
-                                .filter(d => OBSTACLE_CLASSES.has(d.label) && d.confidence > 0.35)
-                                .map(d => ({ ...d, distance: estimateDistance(d.pctBbox), direction: getDirection(d.pctBbox) }));
-                            const tracked = trackerRef.current.update(obs, W, H);
-                            const hasPerson = tracked.some(d => d.label === 'person');
-                            let enriched = tracked;
-                            if (hasPerson && faceReady && matcherRef.current && frameRef.current % 5 === 0) {
-                                try {
-                                    const detected = await detectFaces(vid);
-                                    const matched  = matchFaces(detected, matcherRef.current);
-                                    setFaceResults(matched.filter(f => !f.unknown));
-                                    enriched = tracked.map(d => {
-                                        if (d.label !== 'person') return d;
-                                        const face = matched.find(f => !f.unknown && boxOverlap(f.box, d.pctBbox, W, H) > 0.25);
-                                        return face ? { ...d, knownName: face.name, faceConf: Math.round((1 - face.distance) * 100) } : d;
-                                    });
-                                    for (const m of matched) {
-                                        if (m.unknown) continue;
-                                        if (canSpeak(`face-${m.name}`, 6000)) {
-                                            doSpeak(`Your friend ${m.name} is in front of you`);
-                                            addAlert(`${m.name} recognized`, false);
-                                        }
-                                    }
-                                } catch { /* transient */ }
-                            }
-                            setObstacles(enriched);
-                            window.dispatchEvent(new CustomEvent('sb:vision', { 
-                                detail: { detections: enriched.map(d => ({ label: d.knownName || d.label, confidence: d.confidence, pctBbox: d.pctBbox })) } 
+                    stopFn = await startObjectDetection(vid, async (result) => {
+                        const W = vid.videoWidth || 640;
+                        const H = vid.videoHeight || 480;
+                        frameRef.current++;
+                        if (result.latency) setLastLatencyMs(result.latency);
+
+                        // Map ALL detected objects with confidence >= 0.20
+                        const obs = (result.detections || [])
+                            .filter(d => d.label && (d.confidence || 0) >= 0.20)
+                            .map(d => ({
+                                ...d,
+                                label: (d.label || 'obstacle').toLowerCase().trim(),
+                                distance: d.distance_m ? (d.distance_m < 1.2 ? 'close' : d.distance_m < 2.5 ? 'medium' : 'far') : estimateDistance(d.pctBbox),
+                                direction: getDirection(d.pctBbox)
                             }));
-                            
-                            // ── Directional Navigation & Obstacle Guidance Engine ──
-                            // Finds the most critical obstacles and delivers explicit directional steering:
-                            // "Watch out! [Object] ahead, go left / go right"
-                            const dangerous = enriched.filter(d => 
-                                (d.distance === 'close' || d.distance === 'medium') && (d.confidence || 0.5) >= 0.35
-                            );
 
-                            if (dangerous.length > 0) {
-                                // Prioritize: closest first, then approaching objects, then center path obstacles
-                                dangerous.sort((a, b) => {
-                                    if (a.distance === 'close' && b.distance !== 'close') return -1;
-                                    if (b.distance === 'close' && a.distance !== 'close') return 1;
-                                    if (a.motion?.approaching && !b.motion?.approaching) return -1;
-                                    if (b.motion?.approaching && !a.motion?.approaching) return 1;
-                                    const aCenter = Math.abs((a.pctBbox[0] + a.pctBbox[2] / 2) - 50);
-                                    const bCenter = Math.abs((b.pctBbox[0] + b.pctBbox[2] / 2) - 50);
-                                    return aCenter - bCenter;
+                        const tracked = trackerRef.current.update(obs, W, H);
+                        const hasPerson = tracked.some(d => d.label === 'person');
+                        let enriched = tracked;
+
+                        if (hasPerson && faceReady && matcherRef.current && frameRef.current % 5 === 0) {
+                            try {
+                                const detected = await detectFaces(vid);
+                                const matched  = matchFaces(detected, matcherRef.current);
+                                setFaceResults(matched.filter(f => !f.unknown));
+                                enriched = tracked.map(d => {
+                                    if (d.label !== 'person') return d;
+                                    const face = matched.find(f => !f.unknown && boxOverlap(f.box, d.pctBbox, W, H) > 0.25);
+                                    return face ? { ...d, knownName: face.name, faceConf: Math.round((1 - face.distance) * 100) } : d;
                                 });
+                                for (const m of matched) {
+                                    if (m.unknown) continue;
+                                    if (shouldEmitVisionAlert(`face-${m.name}`, 1.5, false, 'ahead')) {
+                                        doSpeak(`Your friend ${m.name} is in front of you`);
+                                        addAlert(`${m.name} recognized`, false);
+                                    }
+                                }
+                            } catch { /* transient */ }
+                        }
 
-                                const pri = dangerous[0];
-                                const label = pri.knownName || pri.label;
-                                const cx = pri.pctBbox[0] + pri.pctBbox[2] / 2;
-                                const isVeryClose = pri.distance === 'close';
+                        setObstacles(enriched);
+                        window.dispatchEvent(new CustomEvent('sb:vision', { 
+                            detail: { detections: enriched.map(d => ({ label: d.knownName || d.label, confidence: d.confidence, pctBbox: d.pctBbox })) } 
+                        }));
+                        
+                        // ── Directional Navigation & Obstacle Guidance Engine ──
+                        // Evaluates obstacles and delivers explicit directional steering:
+                        // "Watch out! [Object] ahead, go left / go right"
+                        if (enriched.length > 0) {
+                            // Prioritize closest obstacles first, then approaching objects, then center path obstacles
+                            const sortedObs = [...enriched].sort((a, b) => {
+                                const distWeight = { close: 0, medium: 1, far: 2 };
+                                const dDiff = (distWeight[a.distance] ?? 1) - (distWeight[b.distance] ?? 1);
+                                if (dDiff !== 0) return dDiff;
+                                if (a.motion?.approaching && !b.motion?.approaching) return -1;
+                                if (b.motion?.approaching && !a.motion?.approaching) return 1;
+                                const aCenter = Math.abs(((a.pctBbox?.[0] || 50) + (a.pctBbox?.[2] || 0) / 2) - 50);
+                                const bCenter = Math.abs(((b.pctBbox?.[0] || 50) + (b.pctBbox?.[2] || 0) / 2) - 50);
+                                return aCenter - bCenter;
+                            });
 
-                                // Determine clearer side: check if obstacles crowd left (<40%) or right (>60%)
-                                const hasLeftBlocked = dangerous.some(o => (o.pctBbox[0] + o.pctBbox[2] / 2) < 40);
-                                const hasRightBlocked = dangerous.some(o => (o.pctBbox[0] + o.pctBbox[2] / 2) > 60);
+                            const pri = sortedObs[0];
+                            const label = pri.knownName || pri.label;
+                            const cx = pri.pctBbox ? (pri.pctBbox[0] + pri.pctBbox[2] / 2) : 50;
+                            const isVeryClose = pri.distance === 'close';
 
-                                let steer = 'right';
-                                if (hasLeftBlocked && !hasRightBlocked) steer = 'right';
-                                else if (hasRightBlocked && !hasLeftBlocked) steer = 'left';
-                                else steer = cx >= 50 ? 'left' : 'right';
+                            // Determine clearer evasion side
+                            const leftBlocked = enriched.some(o => ((o.pctBbox?.[0] || 0) + (o.pctBbox?.[2] || 0) / 2) < 45);
+                            const rightBlocked = enriched.some(o => ((o.pctBbox?.[0] || 0) + (o.pctBbox?.[2] || 0) / 2) > 55);
 
-                                let guidance = '';
-                                let isUrgent = isVeryClose;
+                            let steer = 'right';
+                            if (leftBlocked && !rightBlocked) steer = 'right';
+                            else if (rightBlocked && !leftBlocked) steer = 'left';
+                            else steer = cx >= 50 ? 'left' : 'right';
 
-                                if (pri.motion?.approaching) {
-                                    const appDir = pri.motion.direction || 'ahead';
-                                    const evade = appDir === 'left' ? 'right' : 'left';
-                                    guidance = pri.knownName
-                                        ? `Watch out! Your friend ${pri.knownName} is approaching! Go ${evade}.`
-                                        : `Watch out! ${label} approaching from ${appDir}! Go ${evade}.`;
+                            let guidance = '';
+                            let isUrgent = isVeryClose;
+
+                            if (pri.motion?.approaching) {
+                                const appDir = pri.motion.direction || 'ahead';
+                                const evade = appDir === 'left' ? 'right' : 'left';
+                                guidance = pri.knownName
+                                    ? `Watch out! Your friend ${pri.knownName} is approaching! Go ${evade}.`
+                                    : `Watch out! ${label} approaching from ${appDir}! Go ${evade}.`;
+                                isUrgent = true;
+                            } else if (pri.direction === 'ahead') {
+                                if (isVeryClose) {
+                                    guidance = `Watch out! ${label} directly ahead! Go ${steer} now!`;
                                     isUrgent = true;
-                                } else if (pri.direction === 'ahead') {
-                                    if (isVeryClose) {
-                                        guidance = `Watch out! ${label} directly ahead! Go ${steer} now!`;
-                                        isUrgent = true;
-                                    } else {
-                                        guidance = `Watch out! ${label} ahead. Go ${steer}.`;
-                                    }
-                                } else if (pri.direction === 'left') {
-                                    guidance = isVeryClose
-                                        ? `Watch out! ${label} close on your left. Go right.`
-                                        : `Watch out! ${label} on your left. Keep right.`;
-                                } else if (pri.direction === 'right') {
-                                    guidance = isVeryClose
-                                        ? `Watch out! ${label} close on your right. Go left.`
-                                        : `Watch out! ${label} on your right. Keep left.`;
+                                } else {
+                                    guidance = `Watch out! ${label} ahead. Go ${steer}.`;
                                 }
-
-                                if (guidance && canSpeak(`steer-${label}-${pri.direction}-${pri.distance}`, isUrgent ? 3000 : 5000)) {
-                                    if (isUrgent) {
-                                        playBeep(880, 150);
-                                        setTimeout(() => playBeep(880, 150), 180);
-                                    } else {
-                                        playBeep(660, 120);
-                                    }
-                                    doSpeak(guidance, isUrgent);
-                                    addAlert(guidance, isUrgent);
-                                }
+                            } else if (pri.direction === 'left') {
+                                guidance = isVeryClose
+                                    ? `Watch out! ${label} close on your left. Go right.`
+                                    : `Watch out! ${label} on your left. Keep right.`;
+                            } else if (pri.direction === 'right') {
+                                guidance = isVeryClose
+                                    ? `Watch out! ${label} close on your right. Go left.`
+                                    : `Watch out! ${label} on your right. Keep left.`;
                             }
 
-                            // Hazard analysis every 25 frames (stairs, drop edges, slopes)
-                            if (frameRef.current % 25 === 0) {
-                                const h = analyzeFrameForHazards(vid);
-                                const validHazard = h && h.confidence >= 0.82;
-                                setHazard(validHazard ? h : null);
-                                if (validHazard) {
-                                    window.dispatchEvent(new CustomEvent('sb:vision', { detail: { hazard: h } }));
-                                    const type = h.stair ? 'stair' : h.drop ? 'drop' : 'slope';
-                                    const hazardMsg = h.drop
-                                        ? 'Danger! Drop edge ahead. Stop immediately!'
-                                        : h.stair
-                                            ? 'Watch out! Stairs ahead. Watch your step and proceed slowly.'
-                                            : 'Caution: Incline ahead. Watch your footing and continue straight.';
-                                    if (canSpeak(`hazard-${type}`, 8000)) {
-                                        playBeep(h.drop ? 960 : 780, 200);
-                                        doSpeak(hazardMsg, h.drop || h.stair);
-                                        addAlert(hazardMsg, h.drop || h.stair);
-                                    }
+                            const estM = isVeryClose ? 0.8 : (pri.distance === 'medium' ? 1.8 : 3.2);
+                            if (guidance && shouldEmitVisionAlert(`steer-${label}`, estM, isUrgent, steer)) {
+                                if (isUrgent) {
+                                    playBeep(880, 150);
+                                    setTimeout(() => playBeep(880, 150), 180);
+                                } else {
+                                    playBeep(660, 120);
+                                }
+                                doSpeak(guidance, isUrgent);
+                                addAlert(guidance, isUrgent);
+                            }
+                        }
+
+                        // Hazard analysis every 20 frames (stairs, drop edges, slopes)
+                        if (frameRef.current % 20 === 0) {
+                            const h = analyzeFrameForHazards(vid);
+                            const validHazard = h && h.confidence >= 0.72;
+                            setHazard(validHazard ? h : null);
+                            if (validHazard) {
+                                window.dispatchEvent(new CustomEvent('sb:vision', { detail: { hazard: h } }));
+                                const type = h.stair ? 'stair' : h.drop ? 'drop' : 'slope';
+                                const hazardMsg = h.drop
+                                    ? 'Danger! Drop edge ahead. Stop immediately!'
+                                    : h.stair
+                                        ? 'Watch out! Stairs ahead. Watch your step and proceed slowly.'
+                                        : 'Caution: Incline ahead. Watch your footing and continue straight.';
+                                const estM = h.drop ? 0.8 : (h.stair ? 1.5 : 2.5);
+                                if (shouldEmitVisionAlert(`hazard-${type}`, estM, h.drop || h.stair, 'ahead')) {
+                                    playBeep(h.drop ? 960 : 780, 200);
+                                    doSpeak(hazardMsg, h.drop || h.stair);
+                                    addAlert(hazardMsg, h.drop || h.stair);
                                 }
                             }
-                        });
-                    }, 500);
+                        }
+                    });
                 };
+
+                if (vid.readyState >= 1) {
+                    initDetection();
+                } else {
+                    vid.onloadedmetadata = initDetection;
+                }
             } catch { alert('Camera access denied.'); setActive(false); }
         })();
         return () => { if (stopFn) stopFn(); stopObjectDetection(); streamRef.current?.getTracks().forEach(t => t.stop()); };
@@ -408,6 +457,50 @@ const VisionAssistPage = () => {
         if (!txt || txt.length < 2) return false;
         const letters = (txt.match(/[a-zA-Z]/g) || []).length;
         return letters / txt.length > 0.4; // at least 40% alphabetic chars
+    };
+
+    // ── Direct Gemini Vision OCR (Client-side zero-latency) ───────────────
+    const ocrWithGeminiDirect = async (canvas) => {
+        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+        if (!apiKey) return null;
+        try {
+            const imageBase64 = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+            if (!imageBase64) return null;
+            const prompt = `You are an OCR assistant for visually impaired users.
+Extract ALL visible text from this image exactly as written (handwriting, signs, books, screens, packaging).
+If no text is visible, output: NO_TEXT_FOUND
+Output ONLY the extracted text and nothing else.`;
+            const GEMINI_CANDIDATES = ['gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-flash-latest'];
+            for (const model of GEMINI_CANDIDATES) {
+                try {
+                    const res = await fetch(
+                        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                contents: [{
+                                    parts: [
+                                        { text: prompt },
+                                        { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } }
+                                    ]
+                                }],
+                                generationConfig: { temperature: 0.1, maxOutputTokens: 2048 }
+                            }),
+                            signal: AbortSignal.timeout(8000),
+                        }
+                    );
+                    if (res.ok) {
+                        const data = await res.json();
+                        const raw = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+                        if (raw && raw !== 'NO_TEXT_FOUND') return raw;
+                    }
+                } catch {}
+            }
+            return null;
+        } catch {
+            return null;
+        }
     };
 
     // ── Backend OCR via Gemini Vision ─────────────────────────────────────
@@ -499,10 +592,15 @@ const VisionAssistPage = () => {
         setShowOcrCard(true);
 
         try {
-            // 1. Try backend Gemini Vision OCR first (reliable, works offline from CDN perspective)
-            let text = await ocrWithBackend(canvas);
+            // 1. Direct Gemini Vision OCR (fastest, high accuracy on Android & Web)
+            let text = await ocrWithGeminiDirect(canvas);
 
-            // 2. Fallback to Tesseract.js if backend unavailable or returned empty
+            // 2. Try backend Gemini Vision OCR proxy
+            if (!text) {
+                text = await ocrWithBackend(canvas);
+            }
+
+            // 3. Fallback to Tesseract.js
             if (!text) {
                 try {
                     text = await ocrWithTesseract(canvas);
@@ -517,7 +615,8 @@ const VisionAssistPage = () => {
             } else {
                 setOcrText(text);
                 addAlert(`OCR: ${text.slice(0, 60)}${text.length > 60 ? '…' : ''}`);
-                speak(text);
+                playBeep(720, 120);
+                speak(text, { priority: 'high', rate: 1.0 });
             }
         } catch (err) {
             setOcrError('OCR failed — please try again.');

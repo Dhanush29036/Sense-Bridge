@@ -217,18 +217,31 @@ const NavigationPage = () => {
     const lastFeatureFetchRef   = useRef(0);
 
     // ── Voice warning announcement with acoustic beep & distance ─────────
-    const announceWarning = useCallback((message, key, isHighPriority = false) => {
+    // Implements Eq. (7) Adaptive Spatio-Temporal Throttling Filter:
+    // A_emit(l,t) = 1 if (t - t_last(l) > tau_cd) OR (Delta d / Delta t < -v_crit)
+    // where tau_cd = 16.0s baseline cooldown and v_crit = 1.8 m/s rapid approach override
+    const announceWarning = useCallback((message, key, isHighPriority = false, currentDist = 10) => {
         if (!voiceAlertsEnabled) return;
         const now = Date.now();
-        const lastSpoken = announcedWarningsRef.current.get(key) || 0;
-        // Throttle repeats of the same hazard landmark to once every 16 seconds
-        if (now - lastSpoken < 16000) return;
+        const prev = announcedWarningsRef.current.get(key);
+        const lastSpoken = prev ? prev.time : 0;
+        const lastDist = prev ? prev.dist : currentDist;
 
-        announcedWarningsRef.current.set(key, now);
+        const dtSeconds = (now - lastSpoken) / 1000;
+        const deltaD = currentDist - lastDist;
+        const approachVelocity = dtSeconds > 0 ? -(deltaD / dtSeconds) : 0;
+        const rapidApproach = approachVelocity >= 1.8; // v_crit = 1.8 m/s
+
+        // tau_cd = 16.0 s baseline landmark cooldown, rapid approach overrides cooldown
+        if (lastSpoken > 0 && dtSeconds < 16.0 && !rapidApproach && !isHighPriority) {
+            return;
+        }
+
+        announcedWarningsRef.current.set(key, { time: now, dist: currentDist });
         setLastSpokenAlert(message);
         playWarningBeep(isHighPriority ? 960 : 840, 140);
         haptics.warning();
-        speak(message, { priority: 'high', rate: 1.05 });
+        speak(message, { priority: isHighPriority ? 'critical' : 'high', rate: 1.05 });
     }, [voiceAlertsEnabled]);
 
     // ── Announce turn step with exact distance & directional steering ────
@@ -297,28 +310,29 @@ const NavigationPage = () => {
                 for (const det of d.detections) {
                     const dist = det.pctBbox ? (() => {
                         const area = det.pctBbox[2] * det.pctBbox[3];
-                        if (area > 900 || det.pctBbox[2] > 30) return 1;
-                        if (area > 200 || det.pctBbox[2] > 12) return 2;
-                        return 4;
-                    })() : 3;
-                    if (dist <= 2) {
-                        const name = det.label || 'obstacle';
-                        const cx = det.pctBbox ? (det.pctBbox[0] + det.pctBbox[2] / 2) : 50;
-                        const steer = cx >= 50 ? 'Go left.' : 'Go right.';
-                        const msg = `Watch out! ${name} ${dist} meters ahead. ${steer}`;
-                        announceWarning(msg, `vision-det-${name}`, true);
-                        setActiveWarnings(prev => {
-                            const filtered = prev.filter(w => !(w.type === 'obstacle' && w.name === name));
-                            return [{ type: 'obstacle', distance: dist, name, source: 'camera' }, ...filtered].slice(0, 8);
-                        });
-                    }
+                        if (area > 160 || det.pctBbox[2] > 15 || det.pctBbox[3] > 22) return 1;
+                        if (area > 20 || det.pctBbox[2] > 4 || det.pctBbox[3] > 6) return 2;
+                        return 3;
+                    })() : 2;
+                    const name = det.label || 'obstacle';
+                    const cx = det.pctBbox ? (det.pctBbox[0] + det.pctBbox[2] / 2) : 50;
+                    const steer = cx >= 50 ? 'Go left.' : 'Go right.';
+                    const isUrgent = dist <= 1;
+                    const msg = isUrgent
+                        ? `Watch out! ${name} directly ahead! ${steer} now!`
+                        : `Watch out! ${name} ${dist} meters ahead. ${steer}`;
+                    announceWarning(msg, `vision-det-${name}`, isUrgent, dist);
+                    setActiveWarnings(prev => {
+                        const filtered = prev.filter(w => !(w.type === 'obstacle' && w.name === name));
+                        return [{ type: 'obstacle', distance: dist, name, source: 'camera' }, ...filtered].slice(0, 8);
+                    });
                 }
 
             } else if (d.obstacle || (d.label && d.distance === 'close')) {
                 // Close-obstacle signal
                 const name = d.obstacle || d.label;
-                const msg = `Watch out! ${name} directly ahead! Go around it.`;
-                announceWarning(msg, `vision-close-${name}`, true);
+                const msg = `Watch out! ${name} directly ahead! Go left or right around it.`;
+                announceWarning(msg, `vision-close-${name}`, true, 1);
                 setActiveWarnings(prev => {
                     const filtered = prev.filter(w => !(w.type === 'obstacle' && w.name === name));
                     return [{ type: 'obstacle', distance: 1, name, source: 'camera' }, ...filtered].slice(0, 8);

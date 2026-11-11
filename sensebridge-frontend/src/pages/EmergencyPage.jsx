@@ -251,6 +251,20 @@ const EmergencyPage = () => {
         };
         setEventLog(prev => [entry, ...prev].slice(0, 10));
 
+        // Automatic local mailto fallback if backend didn't dispatch email
+        if (sosEmail && (!backendResult || backendResult.emailSentCount === 0)) {
+            const subject = `🚨 EMERGENCY ALERT from ${user?.name || 'SenseBridge user'}`;
+            const mailUrl = mailtoLink(sosEmail, subject, sosText);
+            try {
+                const a = document.createElement('a');
+                a.href = mailUrl;
+                a.target = '_blank';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            } catch {}
+        }
+
         toast.error(
             backendResult?.contactsNotified > 0
                 ? `🚨 SOS sent! Notified via automated dispatch.`

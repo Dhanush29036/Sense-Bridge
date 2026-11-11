@@ -422,6 +422,48 @@ Output ONLY the extracted text, nothing else.`;
 });
 
 /**
+ * POST /api/ai/detect
+ * Server-side object detection fallback using Gemini Vision.
+ */
+router.post('/detect', async (req, res) => {
+    try {
+        let base64 = req.body.image || req.body.imageBase64;
+        if (!base64) return res.status(400).json({ success: false, error: 'image is required' });
+        if (base64.includes('base64,')) {
+            base64 = base64.split('base64,')[1];
+        }
+        const prompt = `You are a computer vision assistant for visually impaired pedestrian navigation.
+Detect prominent obstacles or objects directly ahead in this image.
+Return JSON ONLY:
+{
+  "detections": [
+    {
+      "label": "chair",
+      "confidence": 0.85,
+      "bbox": [100, 150, 200, 300],
+      "direction": "left|ahead|right",
+      "distance_m": 1.2
+    }
+  ]
+}
+If no obstacles are present, return: {"detections": []}`;
+
+        const data = await callGemini([
+            { text: prompt },
+            { inlineData: { mimeType: 'image/jpeg', data: base64 } }
+        ], { temperature: 0.1, maxOutputTokens: 1024 });
+
+        const raw = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '{}';
+        const clean = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        const parsed = JSON.parse(clean);
+        return res.json({ success: true, detections: parsed.detections || [] });
+    } catch (e) {
+        console.warn('[AI Detect] Fallback notice:', e.message);
+        return res.json({ success: false, detections: [] });
+    }
+});
+
+/**
  * POST /api/ai/translate
  * High-speed zero-quota translation endpoint with auto-detection.
  */

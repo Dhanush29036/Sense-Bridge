@@ -11,16 +11,21 @@
 import { logService } from './api';
 import { getBackendBaseURL, getAIBaseURL } from './networkConfig';
 import * as tf from '@tensorflow/tfjs';
+import '@tensorflow/tfjs-backend-cpu';
 import '@tensorflow/tfjs-backend-webgl';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 
 // ═══════════════════════════════════════════════════════════════════════════
-// OBJECT DETECTION — COCO-SSD mobilenet_v2  (≈80% mAP on COCO80)
+// OBJECT DETECTION — COCO-SSD mobilenet_v2 / lit_mobilenet_v2 + Server Fallback
 // ═══════════════════════════════════════════════════════════════════════════
 
 let _visionModel = null;
 let _visionActive = false;
 let _visionRafId = null;
+let _visionModelLoading = false;
+
+export const isVisionModelReady = () => !!_visionModel;
+export const isVisionModelLoading = () => _visionModelLoading;
 
 /**
  * Simple IoU-based Non-Maximum Suppression to remove duplicate boxes.
@@ -304,7 +309,7 @@ export function analyzeFrameForHazards(videoElement) {
 }
 
 
-// Helper to grab frame and run server YOLOv8 detection
+// Helper to grab frame and run server YOLOv8 or backend AI detection
 let _serverDetectBusy = false;
 let _offscreenCanvas = null;
 let _offscreenCtx = null;
@@ -324,39 +329,52 @@ async function runServerDetection(videoElement) {
         _offscreenCtx.drawImage(videoElement, 0, 0, 320, 240);
         const dataUrl = _offscreenCanvas.toDataURL('image/jpeg', 0.6);
 
+        // Try AI microservice first (Flask :8000), then fallback to Node backend (:5000)
+        const endpoints = [];
         const aiBase = getAIBaseURL();
-        const res = await fetch(`${aiBase}/api/detect`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: dataUrl }),
-            signal: AbortSignal.timeout(2500),
-        });
-        if (!res.ok) return null;
-        const data = await res.json();
-        if (!data.success || !Array.isArray(data.detections)) return null;
+        if (aiBase) endpoints.push(`${aiBase}/api/detect`);
+        const backendBase = getBackendBaseURL();
+        if (backendBase) endpoints.push(`${backendBase}/api/ai/detect`);
 
-        const scaleX = W / 320;
-        const scaleY = H / 240;
-        return data.detections.map(d => {
-            const bbox = d.bbox || [0, 0, 50, 50]; // [x1, y1, x2, y2]
-            const x = bbox[0] * scaleX;
-            const y = bbox[1] * scaleY;
-            const w = (bbox[2] - bbox[0]) * scaleX;
-            const h = (bbox[3] - bbox[1]) * scaleY;
-            return {
-                label: d.label,
-                confidence: d.confidence,
-                bbox: [x, y, w, h],
-                pctBbox: [
-                    (x / W) * 100,
-                    (y / H) * 100,
-                    (w / W) * 100,
-                    (h / H) * 100,
-                ],
-                distance_m: d.distance_m,
-                severity: d.severity,
-            };
-        });
+        for (const url of endpoints) {
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: dataUrl }),
+                    signal: AbortSignal.timeout(2000),
+                });
+                if (!res.ok) continue;
+                const data = await res.json();
+                if (!data.success || !Array.isArray(data.detections)) continue;
+
+                const scaleX = W / 320;
+                const scaleY = H / 240;
+                return data.detections.map(d => {
+                    const bbox = d.bbox || [0, 0, 50, 50]; // [x1, y1, x2, y2]
+                    const x = bbox[0] * scaleX;
+                    const y = bbox[1] * scaleY;
+                    const w = (bbox[2] - bbox[0]) * scaleX;
+                    const h = (bbox[3] - bbox[1]) * scaleY;
+                    return {
+                        label: (d.label || 'obstacle').toLowerCase(),
+                        confidence: d.confidence || 0.6,
+                        bbox: [x, y, w, h],
+                        pctBbox: [
+                            (x / W) * 100,
+                            (y / H) * 100,
+                            (w / W) * 100,
+                            (h / H) * 100,
+                        ],
+                        distance_m: d.distance_m,
+                        severity: d.severity,
+                    };
+                });
+            } catch {
+                // Try next endpoint
+            }
+        }
+        return null;
     } catch {
         return null;
     } finally {
@@ -368,22 +386,32 @@ export const startObjectDetection = async (videoElement, onDetection) => {
     console.info('[Vision] Starting object detection…');
     _visionActive = true;
 
-    if (!_visionModel) {
-        try {
-            await tf.setBackend('webgl').catch(() => tf.setBackend('cpu'));
-            await tf.ready();
-            _visionModel = await cocoSsd.load({ base: 'mobilenet_v2' });
-            console.info('[Vision] Model loaded (mobilenet_v2 + WebGL)');
-        } catch (err1) {
-            console.warn('[Vision] mobilenet_v2 load failed, attempting lite_mobilenet_v2:', err1?.message);
+    // Load lightweight mobile model in background without blocking video loop start
+    if (!_visionModel && !_visionModelLoading) {
+        _visionModelLoading = true;
+        (async () => {
             try {
+                await tf.setBackend('webgl').catch(async () => {
+                    console.info('[Vision] Falling back to CPU backend');
+                    await tf.setBackend('cpu');
+                });
+                await tf.ready();
+                // lite_mobilenet_v2 is ~4MB (vs 20MB for mobilenet_v2) - loads fast on mobile & web
                 _visionModel = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-                console.info('[Vision] Model loaded (lite_mobilenet_v2 fallback)');
-            } catch (err2) {
-                console.warn('[Vision] Client-side COCO-SSD unavailable. Using backend YOLOv8 (/api/detect):', err2?.message);
-                _visionModel = null;
+                console.info('[Vision] Model loaded successfully (lite_mobilenet_v2)');
+            } catch (err1) {
+                console.warn('[Vision] lite_mobilenet_v2 load error:', err1?.message);
+                try {
+                    _visionModel = await cocoSsd.load();
+                    console.info('[Vision] Default coco-ssd model loaded');
+                } catch (err2) {
+                    console.warn('[Vision] Client-side COCO-SSD unavailable. Using backend detection:', err2?.message);
+                    _visionModel = null;
+                }
+            } finally {
+                _visionModelLoading = false;
             }
-        }
+        })();
     }
 
     let lastLogTime = 0;
@@ -400,19 +428,20 @@ export const startObjectDetection = async (videoElement, onDetection) => {
         }
         lastDetectionTime = now;
 
-        if (videoElement.readyState >= 2) {
+        if (videoElement && videoElement.readyState >= 2) {
             let detections = null;
 
             if (_visionModel) {
                 try {
-                    const raw = await _visionModel.detect(videoElement, 40, 0.30);
+                    // Score threshold lowered to 0.22 so items (bottles, chairs, tables, cups, bags) are reliably detected
+                    const raw = await _visionModel.detect(videoElement, 30, 0.22);
                     const filtered = nms(raw);
 
                     const W = videoElement.videoWidth || 640;
                     const H = videoElement.videoHeight || 480;
 
                     detections = filtered.map(p => ({
-                        label: p.class,
+                        label: (p.class || 'obstacle').toLowerCase(),
                         confidence: +(p.score.toFixed(3)),
                         bbox: p.bbox,
                         pctBbox: [
@@ -423,29 +452,37 @@ export const startObjectDetection = async (videoElement, onDetection) => {
                         ],
                     }));
                 } catch (e) {
-                    console.warn('[Vision] Local frame detection error, falling back to server:', e?.message);
+                    console.warn('[Vision] Frame detection notice:', e?.message);
                     detections = null;
                 }
             }
 
-            // Fallback to server YOLOv8 if client model unavailable or failed
-            if (!detections) {
+            // Fallback to server detection if client model is still loading or unavailable
+            if (!detections && !_visionModel) {
                 detections = await runServerDetection(videoElement);
             }
 
-            if (detections && _visionActive) {
-                onDetection?.({ detections, timestamp: now, latency: +(performance.now() - now).toFixed(1) });
+            if (_visionActive) {
+                // Always call onDetection so UI stays in sync
+                onDetection?.({ 
+                    detections: detections || [], 
+                    timestamp: now, 
+                    latency: +(performance.now() - now).toFixed(1),
+                    modelLoading: _visionModelLoading
+                });
 
-                const highConf = detections.filter(d => d.confidence > 0.55);
-                if (highConf.length && now - lastLogTime > 4000) {
-                    lastLogTime = now;
-                    logService.create({
-                        eventType: 'object_detection',
-                        message: `Detected: ${highConf.map(d => d.label).join(', ')}`,
-                        severity: 'info',
-                        confidence: Math.max(...highConf.map(d => d.confidence)),
-                        metadata: { detections, model: _visionModel ? 'coco-ssd-mobilenetv2' : 'sensebridge-yolov8-backend' },
-                    }).catch(() => { });
+                if (detections && detections.length > 0) {
+                    const highConf = detections.filter(d => d.confidence > 0.45);
+                    if (highConf.length && now - lastLogTime > 4000) {
+                        lastLogTime = now;
+                        logService.create({
+                            eventType: 'object_detection',
+                            message: `Detected: ${highConf.map(d => d.label).join(', ')}`,
+                            severity: 'info',
+                            confidence: Math.max(...highConf.map(d => d.confidence)),
+                            metadata: { detections, model: _visionModel ? 'coco-ssd-lite' : 'backend-yolo' },
+                        }).catch(() => { });
+                    }
                 }
             }
         }
