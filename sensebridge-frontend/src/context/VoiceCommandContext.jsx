@@ -141,10 +141,21 @@ function matchCommand(transcript) {
 // ── Native TTS (separate from aiService to avoid circular deps) ───────────
 function tts(text, rate = 1.05) {
     if (!text || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.rate = rate; u.pitch = 1; u.volume = 1;
-    window.speechSynthesis.speak(u);
+    // Anchor utterance globally so Android WebView GC cannot silently kill it
+    if (!window._sbVCUtterances) window._sbVCUtterances = new Set();
+    // Cancel first, then wait one tick before speaking (Chromium/Android cancel+speak bug fix)
+    try { window.speechSynthesis.cancel(); } catch {}
+    setTimeout(() => {
+        try {
+            if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+            const u = new SpeechSynthesisUtterance(text);
+            u.rate = rate; u.pitch = 1; u.volume = 1;
+            window._sbVCUtterances.add(u);
+            u.onend   = () => window._sbVCUtterances.delete(u);
+            u.onerror = () => window._sbVCUtterances.delete(u);
+            window.speechSynthesis.speak(u);
+        } catch {}
+    }, 80);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

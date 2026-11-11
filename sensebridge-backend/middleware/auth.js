@@ -13,6 +13,12 @@ const protect = async (req, res, next) => {
         token = req.headers.authorization.split(' ')[1];
     }
 
+    // No token at all — treat as guest so assistive/emergency routes still work
+    if (!token || typeof token !== 'string') {
+        req.user = { _id: 'guest_user', id: 'guest_user', name: 'Guest User', role: 'guest', isActive: true };
+        return next();
+    }
+
     // Allow guest, offline, and demo tokens without requiring DB lookup
     if (
         token.startsWith('guest_') ||

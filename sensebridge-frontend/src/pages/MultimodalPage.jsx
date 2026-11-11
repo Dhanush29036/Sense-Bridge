@@ -15,6 +15,7 @@ import AppLayout from '../layouts/AppLayout';
 import { useFusion, EV_FUSION } from '../context/MultimodalFusionContext';
 import { speak, cancelSpeech } from '../services/aiService';
 import { getAIBaseURL } from '../services/networkConfig';
+import { useLocation } from 'react-router-dom';
 import {
     Eye, Mic, Hand, ScanText, Layers,
     Volume2, Square, Play, RefreshCw, ChevronRight
@@ -59,6 +60,7 @@ const MODALITIES = [
 
 const MultimodalPage = () => {
     const { awareness, fusionBusy, emitVision, emitSpeech, emitGesture } = useFusion();
+    const location = useLocation();
 
     const [running, setRunning]         = useState(false);
     const [camError, setCamError]       = useState(null);
@@ -245,6 +247,23 @@ const MultimodalPage = () => {
         stopCamera();
         stopSpeech();
     }, [stopCamera, stopSpeech]);
+
+    /* ── Auto-start when opened via voice command ────────────────────────── */
+    useEffect(() => {
+        // Voice command passes autoStart:true in location state
+        if (location.state?.autoStart && !running) {
+            setTimeout(() => handleStart(), 500);
+        }
+        // Also listen for vc:start event dispatched after navigation delay
+        const onVcStart = () => { if (!runningRef.current) handleStart(); };
+        const onVcStop  = () => { if (runningRef.current) handleStop(); };
+        window.addEventListener('vc:start', onVcStart);
+        window.addEventListener('vc:stop',  onVcStop);
+        return () => {
+            window.removeEventListener('vc:start', onVcStart);
+            window.removeEventListener('vc:stop',  onVcStop);
+        };
+    }, [location.state, handleStart, handleStop]); // eslint-disable-line react-hooks/exhaustive-deps
 
     /* ── Announce fused result ───────────────────────────────────────────── */
     const announceResult = () => {

@@ -583,6 +583,10 @@ export const stopSpeechRecognition = () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 let _ttsVoice = null;
+// Global utterance anchor set — prevents Android WebView GC from silently killing utterances
+if (typeof window !== 'undefined') {
+    window._sbActiveUtterances = window._sbActiveUtterances || new Set();
+}
 
 function getBestVoice(lang = 'en-US') {
     if (typeof window === 'undefined' || !window.speechSynthesis) return null;
@@ -609,41 +613,52 @@ export const speak = (text, { lang = 'en-US', rate = 1.0, pitch = 1, priority = 
         }
     } catch {}
 
-    try {
-        // Android Chrome WebView fix: unpause engine if paused or stalled
-        if (window.speechSynthesis.paused) {
-            window.speechSynthesis.resume();
-        }
-        if (priority === 'high' || window.speechSynthesis.speaking) {
-            window.speechSynthesis.cancel();
-        }
+    const _doSpeak = () => {
+        try {
+            // Android Chrome WebView: resume stalled engine
+            try {
+                if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+            } catch {}
 
-        if (!_ttsVoice) {
-            _ttsVoice = getBestVoice(lang);
+            if (!_ttsVoice) {
+                _ttsVoice = getBestVoice(lang);
+            }
+
+            const utt = new SpeechSynthesisUtterance(text);
+            utt.lang  = lang;
+            utt.rate  = Math.max(0.7, Math.min(1.8, rate));
+            utt.pitch = pitch;
+            if (_ttsVoice) utt.voice = _ttsVoice;
+
+            // Anchor in global set so Android WebView GC cannot collect it mid-speech
+            window._sbActiveUtterances.add(utt);
+            utt.onend   = () => { window._sbActiveUtterances.delete(utt); };
+            utt.onerror = (e) => {
+                window._sbActiveUtterances.delete(utt);
+                console.warn('[TTS] Synthesis notice:', e.error);
+                try { window.speechSynthesis.resume(); } catch {}
+            };
+
+            window.speechSynthesis.speak(utt);
+        } catch (err) {
+            console.error('[TTS] speak failed:', err);
         }
+    };
 
-        const utt = new SpeechSynthesisUtterance(text);
-        utt.lang = lang;
-        utt.rate = Math.max(0.7, Math.min(1.8, rate));
-        utt.pitch = pitch;
-        if (_ttsVoice) {
-            utt.voice = _ttsVoice;
-        }
-
-        utt.onerror = (e) => {
-            console.warn('[TTS] Synthesis notice:', e.error);
-            try { window.speechSynthesis.resume(); } catch {}
-        };
-
-        window.speechSynthesis.speak(utt);
-    } catch (err) {
-        console.error('[TTS] speak failed:', err);
+    if (priority === 'high') {
+        // Cancel current speech, then wait one tick before speaking
+        // (Chromium/Android WebView bug: calling speak() synchronously after cancel() silently drops it)
+        try { window.speechSynthesis.cancel(); } catch {}
+        setTimeout(_doSpeak, 80);
+    } else {
+        _doSpeak();
     }
 };
 
 export const cancelSpeech = () => {
     try {
         window.speechSynthesis?.cancel();
+        if (typeof window !== 'undefined') window._sbActiveUtterances?.clear();
     } catch {}
 };
 
@@ -653,6 +668,8 @@ if (typeof window !== 'undefined' && window.speechSynthesis) {
         window.speechSynthesis.onvoiceschanged = () => {
             _ttsVoice = getBestVoice('en-US');
         };
+        // Trigger initial voice load
+        window.speechSynthesis.getVoices();
     } catch {}
 }
 

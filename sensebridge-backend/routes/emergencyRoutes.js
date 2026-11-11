@@ -41,9 +41,13 @@ const getMailer = () => {
         EMAIL_USER === 'your_gmail@gmail.com') return null;
     try {
         const nodemailer = require('nodemailer');
+        // Try SMTP port 465 (SSL) for Gmail app passwords — more reliable than the 'gmail' service shorthand
         _mailer = nodemailer.createTransport({
-            service: 'gmail',
+            host: 'smtp.gmail.com',
+            port: 465,
+            secure: true,
             auth: { user: EMAIL_USER, pass: EMAIL_PASS },
+            tls: { rejectUnauthorized: false },
         });
         return _mailer;
     } catch {

@@ -114,12 +114,27 @@ const HAZARD_INFO = {
 };
 
 // Acoustic warning beep using Web Audio API
+// A singleton AudioContext is reused to prevent Android suspension issues
+let _navAudioCtx = null;
+const getNavAudioCtx = () => {
+    try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return null;
+        if (!_navAudioCtx || _navAudioCtx.state === 'closed') {
+            _navAudioCtx = new AC();
+        }
+        if (_navAudioCtx.state === 'suspended') {
+            _navAudioCtx.resume().catch(() => {});
+        }
+        return _navAudioCtx;
+    } catch { return null; }
+};
+
 const playWarningBeep = (freq = 880, duration = 120) => {
     try {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (!AudioContext) return;
-        const ctx = new AudioContext();
-        const osc = ctx.createOscillator();
+        const ctx = getNavAudioCtx();
+        if (!ctx) return;
+        const osc  = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.type = 'sine';
         osc.frequency.setValueAtTime(freq, ctx.currentTime);
@@ -442,16 +457,27 @@ const NavigationPage = () => {
 
     useEffect(() => {
         startGPS();
+        // Announce page load so the user knows navigation opened
+        setTimeout(() => {
+            speak('Navigation page opened. Search for a destination using the search box, or say navigate to followed by your destination.', { priority: 'high' });
+        }, 600);
         return () => {
             if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
         };
-    }, []);
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ── Pre-fill destination from voice command ────────────────────────────
     useEffect(() => {
         if (location.state?.destinationQuery) {
             setSearchQuery(location.state.destinationQuery);
             if (location.state.autoNavigate) setAutoNavigateActive(true);
+            routerNavigate(location.pathname, { replace: true, state: {} });
+        }
+        // If opened via voice "start navigation" with no destination, announce prompt
+        if (location.state?.autoStart && !location.state?.destinationQuery) {
+            setTimeout(() => {
+                speak('Navigation is ready. Where would you like to go? Use the search box to enter your destination.', { priority: 'high' });
+            }, 800);
             routerNavigate(location.pathname, { replace: true, state: {} });
         }
     }, [location.state, location.pathname, routerNavigate]);

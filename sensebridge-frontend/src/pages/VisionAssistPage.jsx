@@ -6,6 +6,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import AppLayout from '../layouts/AppLayout';
 import { createWorker } from 'tesseract.js';
+import { getBackendBaseURL } from '../services/networkConfig';
 import {
     startObjectDetection, stopObjectDetection, speak, cancelSpeech,
     ObstacleTracker, analyzeFrameForHazards,
@@ -354,6 +355,35 @@ const VisionAssistPage = () => {
         return letters / txt.length > 0.4; // at least 40% alphabetic chars
     };
 
+    // ── Backend OCR via Gemini Vision ─────────────────────────────────────
+    const ocrWithBackend = async (canvas) => {
+        try {
+            const baseURL = getBackendBaseURL();
+            // Convert canvas to base64 JPEG
+            const imageBase64 = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
+            if (!imageBase64) throw new Error('Canvas capture failed');
+            const token = localStorage.getItem('sb_token') || 'guest_session';
+            const controller = new AbortController();
+            const tId = setTimeout(() => controller.abort(), 12000);
+            const res = await fetch(`${baseURL}/api/ai/ocr`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
+                body: JSON.stringify({ imageBase64, mimeType: 'image/jpeg' }),
+                signal: controller.signal,
+            });
+            clearTimeout(tId);
+            if (!res.ok) throw new Error(`Backend OCR HTTP ${res.status}`);
+            const data = await res.json();
+            return data.text?.trim() || '';
+        } catch (e) {
+            console.warn('[OCR] Backend failed:', e.message);
+            return null;
+        }
+    };
+
     // ── Tesseract multi-pass OCR ───────────────────────────────────────────
     const ocrWithTesseract = async (canvas) => {
         // Lazy-init worker: OEM=1 (LSTM only) set via constructor arg
@@ -396,7 +426,13 @@ const VisionAssistPage = () => {
     const captureOCR = useCallback(async () => {
         const vid    = videoRef.current;
         const canvas = canvasRef.current;
-        if (!vid || !canvas || !active) return;
+        if (!vid || !canvas || !active) {
+            if (!active) {
+                setShowOcrCard(true);
+                setOcrError('Please start the camera first, then press Scan Text.');
+            }
+            return;
+        }
 
         canvas.width  = vid.videoWidth  || 640;
         canvas.height = vid.videoHeight || 480;
@@ -408,10 +444,21 @@ const VisionAssistPage = () => {
         setShowOcrCard(true);
 
         try {
-            const text = await ocrWithTesseract(canvas);
+            // 1. Try backend Gemini Vision OCR first (reliable, works offline from CDN perspective)
+            let text = await ocrWithBackend(canvas);
+
+            // 2. Fallback to Tesseract.js if backend unavailable or returned empty
+            if (!text) {
+                try {
+                    text = await ocrWithTesseract(canvas);
+                } catch (tessErr) {
+                    console.warn('[OCR] Tesseract fallback failed:', tessErr.message);
+                    text = '';
+                }
+            }
 
             if (!text) {
-                setOcrError('No text detected. Hold steady and make sure text is well-lit.');
+                setOcrError('No text detected. Hold camera steady and ensure text is well-lit and in focus.');
             } else {
                 setOcrText(text);
                 addAlert(`OCR: ${text.slice(0, 60)}${text.length > 60 ? '…' : ''}`);
