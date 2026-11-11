@@ -155,10 +155,12 @@ const VisionAssistPage = () => {
     const speakTimer         = useRef(null);
     const ocrWorkerRef       = useRef(null);  // persistent Tesseract worker
     const lastVisionAlertsRef= useRef(new Map()); // key -> { time, dist, steer }
+    const lastBeepRef        = useRef(0);
+    const prevSteerRef       = useRef('right');
 
     // Implements Eq. (7) Adaptive Spatio-Temporal Throttling Filter:
     // A_emit(l,t) = 1 if (t - t_last(l) > tau_cd) OR (Delta d / Delta t < -v_crit)
-    // where tau_cd = 16.0s for static landmarks, 3.5s for dynamic steering, 2.0s for urgent/rapid
+    // where tau_cd = 16.0s for static landmarks, 4.0s for dynamic steering, 2.5s for urgent/rapid
     const shouldEmitVisionAlert = useCallback((key, currentDistMeters, isUrgent, steer) => {
         const now = Date.now();
         const prev = lastVisionAlertsRef.current.get(key);
@@ -171,8 +173,9 @@ const VisionAssistPage = () => {
         const deltaD = currentDistMeters - prev.dist;
         const approachVelocity = dtSeconds > 0 ? -(deltaD / dtSeconds) : 0;
         const rapidApproach = approachVelocity >= 1.8; // v_crit = 1.8 m/s
-        const steerChanged = steer && prev.steer && steer !== prev.steer;
-        const cooldown = isUrgent ? 2.0 : 3.5;
+        const cooldown = isUrgent ? 2.5 : 4.0;
+        // Direction change only overrides if at least 2.5s have elapsed (prevents flip-flop beeping)
+        const steerChanged = steer && prev.steer && steer !== prev.steer && dtSeconds >= 2.5;
 
         if (dtSeconds >= cooldown || rapidApproach || steerChanged) {
             lastVisionAlertsRef.current.set(key, { time: now, dist: currentDistMeters, steer });
@@ -316,14 +319,17 @@ const VisionAssistPage = () => {
                             const cx = pri.pctBbox ? (pri.pctBbox[0] + pri.pctBbox[2] / 2) : 50;
                             const isVeryClose = pri.distance === 'close';
 
-                            // Determine clearer evasion side
-                            const leftBlocked = enriched.some(o => ((o.pctBbox?.[0] || 0) + (o.pctBbox?.[2] || 0) / 2) < 45);
-                            const rightBlocked = enriched.some(o => ((o.pctBbox?.[0] || 0) + (o.pctBbox?.[2] || 0) / 2) > 55);
+                            // Determine clearer evasion side with deadband hysteresis (prevents rapid left/right oscillation)
+                            const leftBlocked = enriched.some(o => ((o.pctBbox?.[0] || 0) + (o.pctBbox?.[2] || 0) / 2) < 42);
+                            const rightBlocked = enriched.some(o => ((o.pctBbox?.[0] || 0) + (o.pctBbox?.[2] || 0) / 2) > 58);
 
-                            let steer = 'right';
+                            let steer = prevSteerRef.current;
                             if (leftBlocked && !rightBlocked) steer = 'right';
                             else if (rightBlocked && !leftBlocked) steer = 'left';
-                            else steer = cx >= 50 ? 'left' : 'right';
+                            else if (cx > 56) steer = 'left';  // obstacle on right -> steer left
+                            else if (cx < 44) steer = 'right'; // obstacle on left -> steer right
+                            // within [44, 56], keep previous steer direction to eliminate jitter
+                            prevSteerRef.current = steer;
 
                             let guidance = '';
                             let isUrgent = isVeryClose;
@@ -354,11 +360,10 @@ const VisionAssistPage = () => {
 
                             const estM = isVeryClose ? 0.8 : (pri.distance === 'medium' ? 1.8 : 3.2);
                             if (guidance && shouldEmitVisionAlert(`steer-${label}`, estM, isUrgent, steer)) {
-                                if (isUrgent) {
-                                    playBeep(880, 150);
-                                    setTimeout(() => playBeep(880, 150), 180);
-                                } else {
-                                    playBeep(660, 120);
+                                const now = Date.now();
+                                if (now - lastBeepRef.current >= 2500) {
+                                    lastBeepRef.current = now;
+                                    playBeep(isUrgent ? 880 : 660, 140);
                                 }
                                 doSpeak(guidance, isUrgent);
                                 addAlert(guidance, isUrgent);
@@ -380,7 +385,11 @@ const VisionAssistPage = () => {
                                         : 'Caution: Incline ahead. Watch your footing and continue straight.';
                                 const estM = h.drop ? 0.8 : (h.stair ? 1.5 : 2.5);
                                 if (shouldEmitVisionAlert(`hazard-${type}`, estM, h.drop || h.stair, 'ahead')) {
-                                    playBeep(h.drop ? 960 : 780, 200);
+                                    const now = Date.now();
+                                    if (now - lastBeepRef.current >= 2500) {
+                                        lastBeepRef.current = now;
+                                        playBeep(h.drop ? 960 : 780, 180);
+                                    }
                                     doSpeak(hazardMsg, h.drop || h.stair);
                                     addAlert(hazardMsg, h.drop || h.stair);
                                 }

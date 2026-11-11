@@ -731,58 +731,89 @@ class SpeechQueue {
             }
         }
 
+        let utt = null;
+        const advanceQueue = () => {
+            clearTimeout(this.watchdogTimer);
+            if (utt && window._sbActiveUtterances) window._sbActiveUtterances.delete(utt);
+            this.isSpeaking = false;
+            this.currentPriority = 'normal';
+            // Small 40ms interval between sentences so words never overlap or collide
+            setTimeout(() => this.processNext(), 40);
+        };
+
+        // ── Tier 1: Hardware-native Android TTS engine (works offline, zero-latency, full speaker volume) ──
+        if (typeof window !== 'undefined' && window.AndroidTTS && typeof window.AndroidTTS.speak === 'function') {
+            try {
+                window.AndroidTTS.speak(item.text);
+                const estimatedMs = Math.max(1200, (item.text.length * 68) + 400);
+                this.watchdogTimer = setTimeout(advanceQueue, estimatedMs);
+                return;
+            } catch (e) {
+                console.warn('[TTS] AndroidTTS notice:', e);
+            }
+        }
+
+        // ── Tier 2: Web Speech API (speechSynthesis) ──
+        let webSpeechSuccess = false;
         try {
-            if (window.speechSynthesis.paused) {
-                try { window.speechSynthesis.resume(); } catch {}
-            }
-
-            if (!_ttsVoice) {
-                _ttsVoice = getBestVoice(item.lang);
-            }
-
-            const utt = new SpeechSynthesisUtterance(item.text);
-            utt.lang  = item.lang;
-            utt.rate  = item.rate;
-            utt.pitch = item.pitch;
-            if (_ttsVoice) utt.voice = _ttsVoice;
-
-            // Anchor globally to prevent Android WebView GC from aborting speech
-            window._sbActiveUtterances.add(utt);
-
-            const advanceQueue = () => {
-                clearTimeout(this.watchdogTimer);
-                window._sbActiveUtterances.delete(utt);
-                this.isSpeaking = false;
-                this.currentPriority = 'normal';
-                // Small 40ms interval between sentences so words never overlap or collide
-                setTimeout(() => this.processNext(), 40);
-            };
-
-            utt.onend = advanceQueue;
-            utt.onerror = (e) => {
-                console.warn('[TTS Queue] Notice:', e.error);
-                advanceQueue();
-            };
-
-            // Watchdog fallback in case onend fails to trigger on mobile WebView
-            const estimatedMs = Math.max(1600, (item.text.length * 80) + 1200);
-            this.watchdogTimer = setTimeout(() => {
-                if (this.isSpeaking) {
-                    advanceQueue();
+            if (typeof window !== 'undefined' && window.speechSynthesis) {
+                if (window.speechSynthesis.paused) {
+                    try { window.speechSynthesis.resume(); } catch {}
                 }
-            }, estimatedMs);
 
-            window.speechSynthesis.speak(utt);
+                if (!_ttsVoice) {
+                    _ttsVoice = getBestVoice(item.lang);
+                }
+
+                utt = new SpeechSynthesisUtterance(item.text);
+                utt.lang  = item.lang;
+                utt.rate  = item.rate;
+                utt.pitch = item.pitch;
+                if (_ttsVoice) utt.voice = _ttsVoice;
+
+                window._sbActiveUtterances.add(utt);
+
+                utt.onend = advanceQueue;
+                utt.onerror = (e) => {
+                    console.warn('[TTS Queue] Notice:', e.error);
+                    advanceQueue();
+                };
+
+                const estimatedMs = Math.max(1600, (item.text.length * 80) + 1200);
+                this.watchdogTimer = setTimeout(() => {
+                    if (this.isSpeaking) advanceQueue();
+                }, estimatedMs);
+
+                window.speechSynthesis.speak(utt);
+                webSpeechSuccess = true;
+            }
         } catch (err) {
             console.error('[TTS Queue] Speech synthesis failed:', err);
-            this.isSpeaking = false;
-            this.processNext();
+        }
+
+        // ── Tier 3: HTML5 Audio stream fallback (e.g. if WebSpeech has no voices or is muted in WebView) ──
+        if (!webSpeechSuccess || (window.speechSynthesis && window.speechSynthesis.getVoices().length === 0)) {
+            try {
+                const encoded = encodeURIComponent(item.text.slice(0, 150));
+                const audio = new Audio(`https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q=${encoded}`);
+                audio.onended = advanceQueue;
+                audio.onerror = advanceQueue;
+                const p = audio.play();
+                if (p) p.catch(() => advanceQueue());
+            } catch {
+                advanceQueue();
+            }
         }
     }
 
     stopCurrent() {
         clearTimeout(this.watchdogTimer);
-        try { window.speechSynthesis.cancel(); } catch {}
+        try {
+            if (typeof window !== 'undefined' && window.AndroidTTS?.stop) {
+                window.AndroidTTS.stop();
+            }
+        } catch {}
+        try { window.speechSynthesis?.cancel(); } catch {}
         this.isSpeaking = false;
         this.currentPriority = 'normal';
         if (typeof window !== 'undefined') window._sbActiveUtterances?.clear();

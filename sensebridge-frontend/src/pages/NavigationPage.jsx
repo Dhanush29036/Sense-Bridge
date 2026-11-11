@@ -130,8 +130,12 @@ const getNavAudioCtx = () => {
     } catch { return null; }
 };
 
+let _lastNavBeepTime = 0;
 const playWarningBeep = (freq = 880, duration = 120) => {
     try {
+        const now = Date.now();
+        if (now - _lastNavBeepTime < 2200) return;
+        _lastNavBeepTime = now;
         const ctx = getNavAudioCtx();
         if (!ctx) return;
         const osc  = ctx.createOscillator();
