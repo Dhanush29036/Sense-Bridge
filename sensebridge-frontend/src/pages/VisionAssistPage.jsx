@@ -178,9 +178,11 @@ const VisionAssistPage = () => {
 
     const doSpeak = useCallback((text, urgent = false) => {
         clearTimeout(speakTimer.current);
-        setSpeaking(true); setCurAlert(text); cancelSpeech();
-        speak(text, { priority: urgent ? 'high' : 'normal', rate: urgent ? 1.1 : 1.0 });
-        speakTimer.current = setTimeout(() => setSpeaking(false), text.length * 65 + 400);
+        setSpeaking(true);
+        setCurAlert(text);
+        // Do NOT call cancelSpeech() here — let SpeechQueue serialize and prioritize smoothly
+        speak(text, { priority: urgent ? 'high' : 'normal', rate: urgent ? 1.08 : 1.0 });
+        speakTimer.current = setTimeout(() => setSpeaking(false), Math.max(2000, text.length * 70));
     }, []);
 
     const addAlert = useCallback((msg, urgent = false) => {
@@ -248,43 +250,96 @@ const VisionAssistPage = () => {
                                 detail: { detections: enriched.map(d => ({ label: d.knownName || d.label, confidence: d.confidence, pctBbox: d.pctBbox })) } 
                             }));
                             
-                            for (const d of enriched) {
-                                const label = d.knownName || d.label;
-                                if (d.motion?.approaching && d.motion?.verdict) {
-                                    const verdict = d.knownName
-                                        ? `Warning! Your friend ${d.knownName} is approaching from ${d.motion.direction}`
-                                        : `Warning! ${d.motion.verdict}`;
-                                    if (canSpeak(`approach-${label}-${d.motion.direction}`, 3000)) { 
-                                        playBeep(880, 200);
-                                        doSpeak(verdict, true); 
-                                        addAlert(verdict, true); 
+                            // ── Directional Navigation & Obstacle Guidance Engine ──
+                            // Finds the most critical obstacles and delivers explicit directional steering:
+                            // "Watch out! [Object] ahead, go left / go right"
+                            const dangerous = enriched.filter(d => 
+                                (d.distance === 'close' || d.distance === 'medium') && (d.confidence || 0.5) >= 0.35
+                            );
+
+                            if (dangerous.length > 0) {
+                                // Prioritize: closest first, then approaching objects, then center path obstacles
+                                dangerous.sort((a, b) => {
+                                    if (a.distance === 'close' && b.distance !== 'close') return -1;
+                                    if (b.distance === 'close' && a.distance !== 'close') return 1;
+                                    if (a.motion?.approaching && !b.motion?.approaching) return -1;
+                                    if (b.motion?.approaching && !a.motion?.approaching) return 1;
+                                    const aCenter = Math.abs((a.pctBbox[0] + a.pctBbox[2] / 2) - 50);
+                                    const bCenter = Math.abs((b.pctBbox[0] + b.pctBbox[2] / 2) - 50);
+                                    return aCenter - bCenter;
+                                });
+
+                                const pri = dangerous[0];
+                                const label = pri.knownName || pri.label;
+                                const cx = pri.pctBbox[0] + pri.pctBbox[2] / 2;
+                                const isVeryClose = pri.distance === 'close';
+
+                                // Determine clearer side: check if obstacles crowd left (<40%) or right (>60%)
+                                const hasLeftBlocked = dangerous.some(o => (o.pctBbox[0] + o.pctBbox[2] / 2) < 40);
+                                const hasRightBlocked = dangerous.some(o => (o.pctBbox[0] + o.pctBbox[2] / 2) > 60);
+
+                                let steer = 'right';
+                                if (hasLeftBlocked && !hasRightBlocked) steer = 'right';
+                                else if (hasRightBlocked && !hasLeftBlocked) steer = 'left';
+                                else steer = cx >= 50 ? 'left' : 'right';
+
+                                let guidance = '';
+                                let isUrgent = isVeryClose;
+
+                                if (pri.motion?.approaching) {
+                                    const appDir = pri.motion.direction || 'ahead';
+                                    const evade = appDir === 'left' ? 'right' : 'left';
+                                    guidance = pri.knownName
+                                        ? `Watch out! Your friend ${pri.knownName} is approaching! Go ${evade}.`
+                                        : `Watch out! ${label} approaching from ${appDir}! Go ${evade}.`;
+                                    isUrgent = true;
+                                } else if (pri.direction === 'ahead') {
+                                    if (isVeryClose) {
+                                        guidance = `Watch out! ${label} directly ahead! Go ${steer} now!`;
+                                        isUrgent = true;
+                                    } else {
+                                        guidance = `Watch out! ${label} ahead. Go ${steer}.`;
                                     }
-                                } else if (d.distance === 'close') {
-                                    const dir = d.direction === 'ahead' ? 'on your path' : `on your ${d.direction}`;
-                                    if (canSpeak(`close-${label}-${d.direction}`, 5000)) { 
-                                        playBeep(660, 150);
-                                        setTimeout(() => playBeep(660, 150), 200);
-                                        doSpeak(`${label} very close ${dir}`, true); 
-                                        addAlert(`${label} very close ${dir}`, true); 
+                                } else if (pri.direction === 'left') {
+                                    guidance = isVeryClose
+                                        ? `Watch out! ${label} close on your left. Go right.`
+                                        : `Watch out! ${label} on your left. Keep right.`;
+                                } else if (pri.direction === 'right') {
+                                    guidance = isVeryClose
+                                        ? `Watch out! ${label} close on your right. Go left.`
+                                        : `Watch out! ${label} on your right. Keep left.`;
+                                }
+
+                                if (guidance && canSpeak(`steer-${label}-${pri.direction}-${pri.distance}`, isUrgent ? 3000 : 5000)) {
+                                    if (isUrgent) {
+                                        playBeep(880, 150);
+                                        setTimeout(() => playBeep(880, 150), 180);
+                                    } else {
+                                        playBeep(660, 120);
                                     }
-                                } else if (d.distance === 'medium' && MOVING_CLASSES.has(d.label)) {
-                                    if (canSpeak(`med-${label}-${d.direction}`, 7000)) { 
-                                        playBeep(440, 100);
-                                        doSpeak(`${label} nearby on ${d.direction}`); 
-                                        addAlert(`${label} nearby on ${d.direction}`); 
-                                    }
+                                    doSpeak(guidance, isUrgent);
+                                    addAlert(guidance, isUrgent);
                                 }
                             }
-                            // Hazard analysis every 30 frames with stricter confidence filter
-                            if (frameRef.current % 30 === 0) {
+
+                            // Hazard analysis every 25 frames (stairs, drop edges, slopes)
+                            if (frameRef.current % 25 === 0) {
                                 const h = analyzeFrameForHazards(vid);
-                                // Only accept hazards with high confidence to prevent false positives
-                                const validHazard = h && h.confidence >= 0.85;
+                                const validHazard = h && h.confidence >= 0.82;
                                 setHazard(validHazard ? h : null);
                                 if (validHazard) {
                                     window.dispatchEvent(new CustomEvent('sb:vision', { detail: { hazard: h } }));
                                     const type = h.stair ? 'stair' : h.drop ? 'drop' : 'slope';
-                                    if (canSpeak(`hazard-${type}`, 12000)) { doSpeak(HAZARD_CFG[type].msg, h.drop); addAlert(HAZARD_CFG[type].label, h.drop); }
+                                    const hazardMsg = h.drop
+                                        ? 'Danger! Drop edge ahead. Stop immediately!'
+                                        : h.stair
+                                            ? 'Watch out! Stairs ahead. Watch your step and proceed slowly.'
+                                            : 'Caution: Incline ahead. Watch your footing and continue straight.';
+                                    if (canSpeak(`hazard-${type}`, 8000)) {
+                                        playBeep(h.drop ? 960 : 780, 200);
+                                        doSpeak(hazardMsg, h.drop || h.stair);
+                                        addAlert(hazardMsg, h.drop || h.stair);
+                                    }
                                 }
                             }
                         });
@@ -488,10 +543,22 @@ const VisionAssistPage = () => {
     const aiConf = getAIConfidence(obstacles);
     const nearest = getNearestMeters(obstacles);
 
-    // The "primary nearest obstacle" label for the status bar
-    const nearestLabel = obstacles.length > 0
-        ? `${obstacles[0].knownName || obstacles[0].label} detected ${obstacles[0].direction === 'ahead' ? 'ahead' : `on your ${obstacles[0].direction}`}, ${DIST_METERS[obstacles[0].distance] || '?'}`
-        : active ? 'No obstacles detected' : 'Press start to begin detection';
+    // Active steering guidance for the status bar & display
+    const nearestLabel = curAlert
+        ? curAlert
+        : (obstacles.length > 0
+            ? (() => {
+                const pri = obstacles[0];
+                const label = pri.knownName || pri.label;
+                const cx = pri.pctBbox ? (pri.pctBbox[0] + pri.pctBbox[2] / 2) : 50;
+                const steer = cx >= 50 ? 'Go left' : 'Go right';
+                if (pri.direction === 'ahead') {
+                    return `⚠️ Watch out! ${label} ahead. ${steer}. (${DIST_METERS[pri.distance] || '1m'})`;
+                }
+                const keep = pri.direction === 'left' ? 'Keep right' : 'Keep left';
+                return `⚠️ Watch out! ${label} on your ${pri.direction}. ${keep}. (${DIST_METERS[pri.distance] || '1.5m'})`;
+            })()
+            : (active ? '✅ Path clear — continue straight' : 'Press start to begin navigation guidance'));
 
     const isOcrMode = location.state?.mode === 'ocr';
     const pageTitle = isOcrMode ? 'Read Text (OCR)' : 'Navigation Mode';

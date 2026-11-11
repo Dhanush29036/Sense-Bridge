@@ -579,7 +579,7 @@ export const stopSpeechRecognition = () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TEXT-TO-SPEECH — Android WebView resilient TTS with settings check
+// TEXT-TO-SPEECH — Non-Overlapping Priority Speech Queue
 // ═══════════════════════════════════════════════════════════════════════════
 
 let _ttsVoice = null;
@@ -602,64 +602,169 @@ function getBestVoice(lang = 'en-US') {
     );
 }
 
-export const speak = (text, { lang = 'en-US', rate = 1.0, pitch = 1, priority = 'normal' } = {}) => {
-    if (!text || typeof window === 'undefined' || !window.speechSynthesis) return;
+/**
+ * SpeechQueue: Ensures speech announcements NEVER overlap or cancel each other
+ * in a rapid loop, while still allowing critical obstacle alerts to preempt routine chatter.
+ */
+class SpeechQueue {
+    constructor() {
+        this.queue = [];
+        this.isSpeaking = false;
+        this.currentPriority = 'normal';
+        this.recentSpoken = new Map(); // text -> timestamp
+        this.watchdogTimer = null;
+    }
 
-    // Check user preference for voice feedback
-    try {
-        const cfg = getConfig();
-        if (cfg.ui?.voiceFeedback === false && priority !== 'high') {
+    enqueue(text, { lang = 'en-US', rate = 1.0, pitch = 1.0, priority = 'normal' } = {}) {
+        if (!text || typeof window === 'undefined' || !window.speechSynthesis) return;
+
+        // Check user preferences
+        try {
+            const cfg = getConfig();
+            if (cfg.ui?.voiceFeedback === false && priority !== 'high' && priority !== 'critical') {
+                return;
+            }
+        } catch {}
+
+        const cleanText = text.trim();
+        if (!cleanText) return;
+
+        const now = Date.now();
+        const lastTime = this.recentSpoken.get(cleanText) || 0;
+        // Throttle identical announcements (2.5s for critical, 4s for high, 5s for normal)
+        const cooldown = priority === 'critical' ? 2500 : (priority === 'high' ? 3500 : 5000);
+        if (now - lastTime < cooldown) {
             return;
         }
-    } catch {}
 
-    const _doSpeak = () => {
+        const item = {
+            text: cleanText,
+            lang,
+            rate: Math.max(0.8, Math.min(1.5, rate)),
+            pitch,
+            priority, // 'critical' | 'high' | 'normal'
+            timestamp: now,
+        };
+
+        // If a critical safety alert arrives ("Watch out! ... Go left"):
+        // Preempt low-priority background chatter immediately
+        if (priority === 'critical' || priority === 'high') {
+            if (this.isSpeaking && this.currentPriority === 'normal') {
+                this.stopCurrent();
+                this.queue.unshift(item);
+                this.processNext();
+                return;
+            }
+        }
+
+        // Keep queue concise (max 3 items) so delayed messages don't play out-of-context
+        if (this.queue.length >= 3) {
+            this.queue = this.queue.filter(q => q.priority !== 'normal');
+            if (this.queue.length >= 3) this.queue.pop();
+        }
+
+        this.queue.push(item);
+        if (!this.isSpeaking) {
+            this.processNext();
+        }
+    }
+
+    processNext() {
+        if (this.isSpeaking || this.queue.length === 0) return;
+        if (typeof window === 'undefined' || !window.speechSynthesis) return;
+
+        const item = this.queue.shift();
+        if (!item) return;
+
+        // Discard stale queued messages older than 5 seconds
+        if (Date.now() - item.timestamp > 5000) {
+            this.processNext();
+            return;
+        }
+
+        this.isSpeaking = true;
+        this.currentPriority = item.priority;
+        this.recentSpoken.set(item.text, Date.now());
+
+        // Prune recentSpoken map
+        if (this.recentSpoken.size > 40) {
+            const cutoff = Date.now() - 15000;
+            for (const [k, v] of this.recentSpoken.entries()) {
+                if (v < cutoff) this.recentSpoken.delete(k);
+            }
+        }
+
         try {
-            // Android Chrome WebView: resume stalled engine
-            try {
-                if (window.speechSynthesis.paused) window.speechSynthesis.resume();
-            } catch {}
-
-            if (!_ttsVoice) {
-                _ttsVoice = getBestVoice(lang);
+            if (window.speechSynthesis.paused) {
+                try { window.speechSynthesis.resume(); } catch {}
             }
 
-            const utt = new SpeechSynthesisUtterance(text);
-            utt.lang  = lang;
-            utt.rate  = Math.max(0.7, Math.min(1.8, rate));
-            utt.pitch = pitch;
+            if (!_ttsVoice) {
+                _ttsVoice = getBestVoice(item.lang);
+            }
+
+            const utt = new SpeechSynthesisUtterance(item.text);
+            utt.lang  = item.lang;
+            utt.rate  = item.rate;
+            utt.pitch = item.pitch;
             if (_ttsVoice) utt.voice = _ttsVoice;
 
-            // Anchor in global set so Android WebView GC cannot collect it mid-speech
+            // Anchor globally to prevent Android WebView GC from aborting speech
             window._sbActiveUtterances.add(utt);
-            utt.onend   = () => { window._sbActiveUtterances.delete(utt); };
-            utt.onerror = (e) => {
+
+            const advanceQueue = () => {
+                clearTimeout(this.watchdogTimer);
                 window._sbActiveUtterances.delete(utt);
-                console.warn('[TTS] Synthesis notice:', e.error);
-                try { window.speechSynthesis.resume(); } catch {}
+                this.isSpeaking = false;
+                this.currentPriority = 'normal';
+                // Small 40ms interval between sentences so words never overlap or collide
+                setTimeout(() => this.processNext(), 40);
             };
+
+            utt.onend = advanceQueue;
+            utt.onerror = (e) => {
+                console.warn('[TTS Queue] Notice:', e.error);
+                advanceQueue();
+            };
+
+            // Watchdog fallback in case onend fails to trigger on mobile WebView
+            const estimatedMs = Math.max(1600, (item.text.length * 80) + 1200);
+            this.watchdogTimer = setTimeout(() => {
+                if (this.isSpeaking) {
+                    advanceQueue();
+                }
+            }, estimatedMs);
 
             window.speechSynthesis.speak(utt);
         } catch (err) {
-            console.error('[TTS] speak failed:', err);
+            console.error('[TTS Queue] Speech synthesis failed:', err);
+            this.isSpeaking = false;
+            this.processNext();
         }
-    };
-
-    if (priority === 'high') {
-        // Cancel current speech, then wait one tick before speaking
-        // (Chromium/Android WebView bug: calling speak() synchronously after cancel() silently drops it)
-        try { window.speechSynthesis.cancel(); } catch {}
-        setTimeout(_doSpeak, 80);
-    } else {
-        _doSpeak();
     }
+
+    stopCurrent() {
+        clearTimeout(this.watchdogTimer);
+        try { window.speechSynthesis.cancel(); } catch {}
+        this.isSpeaking = false;
+        this.currentPriority = 'normal';
+        if (typeof window !== 'undefined') window._sbActiveUtterances?.clear();
+    }
+
+    clear() {
+        this.queue = [];
+        this.stopCurrent();
+    }
+}
+
+const _speechQueue = new SpeechQueue();
+
+export const speak = (text, options = {}) => {
+    _speechQueue.enqueue(text, options);
 };
 
 export const cancelSpeech = () => {
-    try {
-        window.speechSynthesis?.cancel();
-        if (typeof window !== 'undefined') window._sbActiveUtterances?.clear();
-    } catch {}
+    _speechQueue.clear();
 };
 
 // Pre-load voices when they become available
@@ -668,7 +773,6 @@ if (typeof window !== 'undefined' && window.speechSynthesis) {
         window.speechSynthesis.onvoiceschanged = () => {
             _ttsVoice = getBestVoice('en-US');
         };
-        // Trigger initial voice load
         window.speechSynthesis.getVoices();
     } catch {}
 }

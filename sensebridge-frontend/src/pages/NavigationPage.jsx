@@ -42,7 +42,7 @@ const HAZARD_INFO = {
     steps: {
         title: 'Stairs / Steps Ahead',
         icon: '🪜',
-        spoken: (d) => `Warning: Stairs ${d} meters ahead. Watch your step.`,
+        spoken: (d) => `Watch out! Stairs ${d} meters ahead. Watch your step and proceed slowly.`,
         advice: 'Staircase or elevation change ahead. Watch your footing.',
         color: '#FF6B6B',
         badge: 'Warning'
@@ -50,7 +50,7 @@ const HAZARD_INFO = {
     crossing: {
         title: 'Pedestrian Crossing Ahead',
         icon: '🦓',
-        spoken: (d) => `Caution: Pedestrian crossing ${d} meters ahead. Look both ways.`,
+        spoken: (d) => `Watch out! Pedestrian crossing ${d} meters ahead. Look both ways before crossing.`,
         advice: 'Zebra crossing. Look both ways before proceeding.',
         color: '#FFA94D',
         badge: 'Caution'
@@ -58,7 +58,7 @@ const HAZARD_INFO = {
     traffic_signals: {
         title: 'Traffic Signals Ahead',
         icon: '🚦',
-        spoken: (d) => `Traffic lights ${d} meters ahead.`,
+        spoken: (d) => `Traffic lights ${d} meters ahead. Wait for the green pedestrian signal.`,
         advice: 'Wait for the pedestrian signal before crossing.',
         color: '#FFD43B',
         badge: 'Notice'
@@ -66,7 +66,7 @@ const HAZARD_INFO = {
     kerb: {
         title: 'Curb Drop Ahead',
         icon: '⚠️',
-        spoken: (d) => `Caution: Curb drop ${d} meters ahead.`,
+        spoken: (d) => `Watch out! Curb drop ${d} meters ahead. Step down carefully.`,
         advice: 'Pavement drop or uneven kerb ahead.',
         color: '#FF922B',
         badge: 'Caution'
@@ -74,7 +74,7 @@ const HAZARD_INFO = {
     construction: {
         title: 'Construction Zone Ahead',
         icon: '🚧',
-        spoken: (d) => `Warning: Construction zone ${d} meters ahead. Proceed with caution.`,
+        spoken: (d) => `Watch out! Construction zone ${d} meters ahead. Divert slightly and go carefully.`,
         advice: 'Construction work or blocked walkway.',
         color: '#FA5252',
         badge: 'Warning'
@@ -82,7 +82,7 @@ const HAZARD_INFO = {
     obstacle: {
         title: 'Obstacle Ahead',
         icon: '🛑',
-        spoken: (d) => `Warning: Obstacle ${d} meters ahead in your path.`,
+        spoken: (d) => `Watch out! Obstacle ${d} meters ahead in your path. Go around it.`,
         advice: 'Object detected directly in front of you. Divert your path.',
         color: '#F03E3E',
         badge: 'Hazard'
@@ -90,7 +90,7 @@ const HAZARD_INFO = {
     drop: {
         title: 'Drop Edge Ahead',
         icon: '⛔',
-        spoken: (d) => `Danger: Drop edge ${d} meters ahead. Stop!`,
+        spoken: (d) => `Danger! Drop edge ${d} meters ahead. Stop immediately!`,
         advice: 'Steep ledge or platform drop ahead.',
         color: '#E03131',
         badge: 'Danger'
@@ -98,7 +98,7 @@ const HAZARD_INFO = {
     footway: {
         title: 'Sidewalk / Footway Ahead',
         icon: '🚶',
-        spoken: (d) => `Pedestrian sidewalk ${d} meters ahead.`,
+        spoken: (d) => `Pedestrian sidewalk ${d} meters ahead. Continue straight.`,
         advice: 'Safe pedestrian path available.',
         color: '#20C997',
         badge: 'Safe Path'
@@ -106,7 +106,7 @@ const HAZARD_INFO = {
     slope: {
         title: 'Incline / Slope Ahead',
         icon: '📐',
-        spoken: (d) => `Caution: Incline or slope ${d} meters ahead.`,
+        spoken: (d) => `Watch out! Incline or slope ${d} meters ahead. Watch your footing.`,
         advice: 'Slope or ramp ahead. Watch your footing.',
         color: '#6C63FF',
         badge: 'Caution'
@@ -231,17 +231,27 @@ const NavigationPage = () => {
         speak(message, { priority: 'high', rate: 1.05 });
     }, [voiceAlertsEnabled]);
 
-    // ── Announce turn step with exact distance ────────────────────────────
+    // ── Announce turn step with exact distance & directional steering ────
     const announceStepWithDistance = useCallback((stepObj, stepIdx) => {
         if (!stepObj) return;
         const clean = stepObj.instruction?.split('—')?.[0]?.trim() || stepObj.instruction || '';
-        let textToSpeak = clean;
+        const lower = clean.toLowerCase();
+        let steerSuffix = '';
+        if (lower.includes('left')) {
+            steerSuffix = ' Go left.';
+        } else if (lower.includes('right')) {
+            steerSuffix = ' Go right.';
+        } else if (lower.includes('straight') || lower.includes('continue') || lower.includes('head')) {
+            steerSuffix = ' Continue straight.';
+        }
+
+        let textToSpeak = `${clean}.${steerSuffix}`;
         if (stepIdx === currentStep && distToNext !== null) {
             textToSpeak = distToNext < 15
-                ? `Turn now! In ${distToNext} meters, ${clean}`
-                : `In ${distToNext} meters, ${clean}`;
+                ? `Turn now! In ${distToNext} meters, ${clean}.${steerSuffix}`
+                : `In ${distToNext} meters, ${clean}.${steerSuffix}`;
         } else if (stepObj.distance != null) {
-            textToSpeak = `${clean}. Distance: ${formatDist(stepObj.distance)}`;
+            textToSpeak = `${clean}.${steerSuffix} Distance: ${formatDist(stepObj.distance)}`;
         }
         setLastSpokenStep(stepIdx);
         setLastSpokenAlert(textToSpeak);
@@ -283,7 +293,7 @@ const NavigationPage = () => {
                 });
 
             } else if (d.detections && Array.isArray(d.detections)) {
-                // Array of detections from object detection loop
+                // Array of detections from camera object detection loop
                 for (const det of d.detections) {
                     const dist = det.pctBbox ? (() => {
                         const area = det.pctBbox[2] * det.pctBbox[3];
@@ -293,8 +303,9 @@ const NavigationPage = () => {
                     })() : 3;
                     if (dist <= 2) {
                         const name = det.label || 'obstacle';
-                        const info = HAZARD_INFO.obstacle;
-                        const msg = info.spoken ? info.spoken(dist) : `Warning: ${name} ${dist} meters ahead.`;
+                        const cx = det.pctBbox ? (det.pctBbox[0] + det.pctBbox[2] / 2) : 50;
+                        const steer = cx >= 50 ? 'Go left.' : 'Go right.';
+                        const msg = `Watch out! ${name} ${dist} meters ahead. ${steer}`;
                         announceWarning(msg, `vision-det-${name}`, true);
                         setActiveWarnings(prev => {
                             const filtered = prev.filter(w => !(w.type === 'obstacle' && w.name === name));
@@ -304,10 +315,9 @@ const NavigationPage = () => {
                 }
 
             } else if (d.obstacle || (d.label && d.distance === 'close')) {
-                // Legacy close-obstacle signal
+                // Close-obstacle signal
                 const name = d.obstacle || d.label;
-                const info = HAZARD_INFO.obstacle;
-                const msg = info.spoken ? info.spoken(1) : `Warning: ${name} directly ahead. Stop!`;
+                const msg = `Watch out! ${name} directly ahead! Go around it.`;
                 announceWarning(msg, `vision-close-${name}`, true);
                 setActiveWarnings(prev => {
                     const filtered = prev.filter(w => !(w.type === 'obstacle' && w.name === name));
