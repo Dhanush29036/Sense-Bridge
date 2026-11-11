@@ -744,14 +744,29 @@ class SpeechQueue {
         // ── Tier 1: Hardware-native Android TTS engine (works offline, zero-latency, full speaker volume) ──
         if (typeof window !== 'undefined' && window.AndroidTTS && typeof window.AndroidTTS.speak === 'function') {
             try {
-                window.AndroidTTS.speak(item.text);
-                const estimatedMs = Math.max(1200, (item.text.length * 68) + 400);
-                this.watchdogTimer = setTimeout(advanceQueue, estimatedMs);
-                return;
+                const spoke = window.AndroidTTS.speak(item.text);
+                if (spoke) {
+                    const estimatedMs = Math.max(1200, (item.text.length * 68) + 400);
+                    this.watchdogTimer = setTimeout(advanceQueue, estimatedMs);
+                    return;
+                }
             } catch (e) {
                 console.warn('[TTS] AndroidTTS notice:', e);
             }
         }
+
+        const playHtml5AudioFallback = () => {
+            try {
+                const encoded = encodeURIComponent(item.text.slice(0, 160));
+                const audio = new Audio(`https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q=${encoded}`);
+                audio.onended = advanceQueue;
+                audio.onerror = advanceQueue;
+                const p = audio.play();
+                if (p) p.catch(() => advanceQueue());
+            } catch {
+                advanceQueue();
+            }
+        };
 
         // ── Tier 2: Web Speech API (speechSynthesis) ──
         let webSpeechSuccess = false;
@@ -775,8 +790,8 @@ class SpeechQueue {
 
                 utt.onend = advanceQueue;
                 utt.onerror = (e) => {
-                    console.warn('[TTS Queue] Notice:', e.error);
-                    advanceQueue();
+                    console.warn('[TTS Queue] Notice, falling back to Audio stream:', e.error);
+                    playHtml5AudioFallback();
                 };
 
                 const estimatedMs = Math.max(1600, (item.text.length * 80) + 1200);
@@ -791,18 +806,9 @@ class SpeechQueue {
             console.error('[TTS Queue] Speech synthesis failed:', err);
         }
 
-        // ── Tier 3: HTML5 Audio stream fallback (e.g. if WebSpeech has no voices or is muted in WebView) ──
+        // ── Tier 3: HTML5 Audio stream fallback ──
         if (!webSpeechSuccess || (window.speechSynthesis && window.speechSynthesis.getVoices().length === 0)) {
-            try {
-                const encoded = encodeURIComponent(item.text.slice(0, 150));
-                const audio = new Audio(`https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q=${encoded}`);
-                audio.onended = advanceQueue;
-                audio.onerror = advanceQueue;
-                const p = audio.play();
-                if (p) p.catch(() => advanceQueue());
-            } catch {
-                advanceQueue();
-            }
+            playHtml5AudioFallback();
         }
     }
 

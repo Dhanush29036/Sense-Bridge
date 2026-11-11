@@ -159,7 +159,8 @@ const SpeechAssistPage = () => {
     const navigate = useNavigate();
     const location = useLocation();
 
-    const [active,         setActive]         = useState(location.state?.autoStart || false);
+    // Default to active immediately upon entering Speech Mode
+    const [active,         setActive]         = useState(true);
     const [captions,       setCaptions]       = useState([]);
     const [interimText,    setInterimText]    = useState('');
     const [barHeights,     setBarHeights]     = useState(Array(BAR_COUNT).fill(8));
@@ -176,7 +177,7 @@ const SpeechAssistPage = () => {
     const [speakingId,     setSpeakingId]     = useState(null);
     const [showAIDetails,  setShowAIDetails]  = useState(() => getConfig().ui?.showAIDetails ?? false);
 
-    const [speechState,    setSpeechState]    = useState('idle'); // 'idle' | 'listening' | 'hearing' | 'transcribing'
+    const [speechState,    setSpeechState]    = useState('listening'); // 'idle' | 'listening' | 'hearing' | 'transcribing'
 
     const listRef                = useRef(null);
     const captionEndRef          = useRef(null);
@@ -200,15 +201,21 @@ const SpeechAssistPage = () => {
     useEffect(() => {
         const hasMedia = !!(navigator?.mediaDevices?.getUserMedia);
         const hasSR = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
-        setSupported(hasMedia || hasSR);
+        const hasNative = typeof window !== 'undefined' && !!(window.AndroidSTT);
+        setSupported(hasMedia || hasSR || hasNative);
     }, []);
 
-    // ── Voice command listener ───────────────────────────────────────────
+    // ── Voice command listener & Page Load Announcement ───────────────────
     useEffect(() => {
         const onStart = () => setActive(true);
         const onStop  = () => setActive(false);
         window.addEventListener('vc:start', onStart);
         window.addEventListener('vc:stop',  onStop);
+
+        setTimeout(() => {
+            speak('Speech mode active. Listening for speech.', { priority: 'high' });
+        }, 500);
+
         return () => {
             window.removeEventListener('vc:start', onStart);
             window.removeEventListener('vc:stop',  onStop);
@@ -283,6 +290,37 @@ const SpeechAssistPage = () => {
         }
     }, [sourceLang, targetLang]);
 
+    // ── Listen for Native Android SpeechRecognizer events ────────────────
+    useEffect(() => {
+        window.onSpeechResult = (data) => {
+            if (!data || !data.text) return;
+            const text = data.text.trim();
+            if (!text) return;
+            if (!data.isFinal) {
+                setInterimText(text);
+                setSpeechState('hearing');
+            } else {
+                setInterimText('');
+                processFinalSpeech(text, 95);
+                setSpeechState('listening');
+            }
+        };
+
+        window.onSpeechStart = () => {
+            setSpeechState('hearing');
+        };
+
+        window.onSpeechEnd = () => {
+            setSpeechState('listening');
+        };
+
+        return () => {
+            delete window.onSpeechResult;
+            delete window.onSpeechStart;
+            delete window.onSpeechEnd;
+        };
+    }, [processFinalSpeech]);
+
     // ── Start mic visualizer & Voice Activity Detector + Raw Audio Capture
     const startVisualizer = useCallback(async () => {
         try {
@@ -305,7 +343,7 @@ const SpeechAssistPage = () => {
             const processor = audioCtx.createScriptProcessor(4096, 1, 1);
             scriptProcessorRef.current = processor;
             processor.onaudioprocess = (e) => {
-                if (!speechActiveRef.current) return;
+                if (!activeRef.current) return;
                 const inputData = e.inputBuffer.getChannelData(0);
                 if (pcmSamplesRef.current.length < 20 * audioCtx.sampleRate) {
                     pcmSamplesRef.current.push(new Float32Array(inputData));
@@ -330,9 +368,15 @@ const SpeechAssistPage = () => {
                 });
                 setBarHeights(heights);
 
-                // Voice Activity Detection (VAD) via microphone energy
-                const avgVol = freqData.reduce((acc, v) => acc + v, 0) / freqData.length;
-                if (avgVol > 12) {
+                // Voice Activity Detection (VAD) tuned for natural speaking voice (300Hz - 3400Hz)
+                let voiceEnergy = 0;
+                for (let i = 2; i < Math.min(35, freqData.length); i++) {
+                    voiceEnergy += freqData[i];
+                }
+                const avgVoice = voiceEnergy / 33;
+                const maxVol = Math.max(...freqData);
+
+                if (avgVoice > 4 || maxVol > 22) {
                     if (!speechActiveRef.current) {
                         speechActiveRef.current = true;
                         setSpeechState('hearing');
@@ -415,11 +459,22 @@ const SpeechAssistPage = () => {
         }
     }, [processFinalSpeech, sourceLang, targetLang]);
 
-    // ── Start Web Speech Recognition ─────────────────────────────────────
+    // ── Start Recognition (Native Android SpeechRecognizer + Web Speech API) ──
     const startRecognition = useCallback(() => {
+        // 1. If running inside Android APK with native SpeechRecognizer interface
+        if (typeof window !== 'undefined' && window.AndroidSTT && typeof window.AndroidSTT.startListening === 'function') {
+            const langCode = sourceLang.code === 'auto' ? '' : (sourceLang.speechCode || 'en-US');
+            try {
+                window.AndroidSTT.startListening(langCode);
+                console.log('[Speech] Native Android SpeechRecognizer started');
+            } catch (e) {
+                console.warn('[Speech] AndroidSTT start error:', e);
+            }
+        }
+
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SR) {
-            console.log('[Speech] Web Speech API not present; using Universal AI Audio STT');
+            console.log('[Speech] Web Speech API not present; using Universal Native & Audio STT');
             return;
         }
 
@@ -495,6 +550,9 @@ const SpeechAssistPage = () => {
 
     // ── Stop all audio/recognition ───────────────────────────────────────
     const stopAll = useCallback(() => {
+        if (typeof window !== 'undefined' && window.AndroidSTT && typeof window.AndroidSTT.stopListening === 'function') {
+            try { window.AndroidSTT.stopListening(); } catch {}
+        }
         if (rafRef.current) cancelAnimationFrame(rafRef.current);
         if (silenceTimerRef.current) {
             clearTimeout(silenceTimerRef.current);

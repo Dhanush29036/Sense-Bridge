@@ -189,6 +189,12 @@ const VisionAssistPage = () => {
         const onStop  = () => setActive(false);
         window.addEventListener('vc:start', onStart);
         window.addEventListener('vc:stop',  onStop);
+
+        const isOcr = location.state?.mode === 'ocr';
+        setTimeout(() => {
+            speak(isOcr ? 'Read text mode active. Hold text in front of camera and tap scan text.' : 'Navigation mode active. Camera is scanning for obstacles.', { priority: 'high' });
+        }, 500);
+
         return () => {
             window.removeEventListener('vc:start', onStart);
             window.removeEventListener('vc:stop',  onStop);
